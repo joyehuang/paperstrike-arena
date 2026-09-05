@@ -115,6 +115,58 @@ function drawCount(root) {
   return count;
 }
 
+test('repeated bot deaths reuse a fixed roster and only respawn safely', () => {
+  for (let level = 0; level < LEVELS.length; level++) {
+    const arena = fixture(level);
+    const roster = [...arena.bots];
+    for (let round = 0; round < 12; round++) {
+      arena.bots.forEach((b) => {
+        b.alive = false;
+        b.group.visible = false;
+        b.respawn = 0;
+      });
+      arena.updateBots(0.01);
+      arena.emit();
+      assert.deepEqual(arena.bots, roster, 'reuse existing bots');
+      assert.equal(arena.bots.length, LEVELS[level].enemies);
+      assert.equal(
+        arena.state.aliveEnemies,
+        arena.bots.filter((b) => b.alive).length,
+      );
+      for (const bot of arena.bots.filter((b) => b.alive)) {
+        assert.ok(bot.group.position.distanceTo(arena.camera.position) >= 18);
+        assert.equal(bot.cooldown, 2.5);
+      }
+    }
+    arena.level = { ...arena.level, spawns: [{ x: 0, z: 10 }] };
+    arena.bots.forEach((b) => {
+      b.alive = false;
+      b.respawn = 0;
+    });
+    arena.updateBots(0.01);
+    assert.ok(arena.bots.every((b) => !b.alive && b.respawn === 1));
+  }
+});
+
+test('incoming-hit direction follows turns without restarting its hit identity', () => {
+  const arena = fixture();
+  arena.hurtTime = 1;
+  arena.state.lastHurt = {
+    id: 1,
+    sourceX: 0,
+    sourceZ: 0,
+    angle: 0,
+    damage: 8,
+    absorbed: 0,
+    target: 1,
+  };
+  arena.emit();
+  arena.yaw = Math.PI / 2;
+  arena.emit();
+  assert.ok(Math.abs(arena.state.lastHurt.angle - Math.PI / 2) < 0.02);
+  assert.equal(arena.state.lastHurt.id, 1);
+});
+
 test('each assembled map stays below 110 draws including supplies, bots and moving gun parts', () => {
   for (let i = 0; i < LEVELS.length; i++) {
     const arena = fixture(i);

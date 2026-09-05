@@ -12,7 +12,7 @@ Click **全屏进入战场** to request fullscreen and raw pointer input. If ful
 | 折纸工厂 / Paperworks     | Close quarters and three connected lanes        | 6         | 16 kills |
 | 天台速写 / Skyline Sketch | Open sightlines, low cover and stepped terraces | 7         | 20 kills |
 
-All three maps can be selected at the weapon desk. Reaching the objective offers the next level; timeout offers a retry. Changing a map resets health, armor, ammunition, bots, pickups, timers and navigation.
+All three maps can be selected at the weapon desk. Reaching the objective offers the next level; timeout offers a retry. Changing a map resets health, armor, ammunition, bots, pickups, timers and navigation. Each map has a fixed roster (5 / 6 / 7); the HUD shows living opponents against that cap. Kills reuse existing bots after 7–10 seconds. Respawns require cover, at least 18 units from the player, 8 from the death location and 5 from another living bot. If no safe point exists, respawning waits and checks again after one second. Returning bots wait 2.5 seconds before firing. Player respawns randomly select among the safest points and retain 2.5 seconds of protection.
 
 - WASD: move; mouse: look; left mouse: shoot; hold right mouse: aim.
 - 1–4 / wheel: switch pistol, shotgun, sniper and rifle; R: reload.
@@ -41,7 +41,13 @@ Static geometry and pencil outlines are batched. Particles and bullet trails sha
 
 ## Vercel
 
-Production: https://paperstrike-arena.vercel.app
+Production: https://joyehuang.app
+
+Vercel URL: https://paperstrike-arena.vercel.app
+
+Source: https://github.com/joyehuang/paperstrike-arena
+
+Incoming fire displays a bright directional arc and an eight-direction Chinese label for 1.25 seconds. The marker tracks the location of the hit relative to the current camera as the player turns, rather than staying at its initial screen angle.
 
 `vercel.json` uses `npm run build:vercel` to export this same game as static HTML, JavaScript, CSS and local audio in `dist/client`. The build script sets `PAPERSTRIKE_TARGET=vercel`, which selects Vinext's static export and omits Worker-only plugins. No server functions or database are needed for this version.
 

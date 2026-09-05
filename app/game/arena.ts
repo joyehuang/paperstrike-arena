@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { batchSketch, CombatEffects, renderPixelRatio } from './rendering';
 import { enterCombatView } from './presentation';
+import { enemySpawn, damageBearing } from './combat-feedback';
 import { LEVELS, type PickupSpot } from './levels';
 import { PICKUPS, collectSupply, absorbDamage, reloadPose } from './supplies';
 import { GameAudio, type Sound } from './audio';
@@ -26,6 +27,7 @@ export type Snapshot = {
   reloadLabel: string;
   pickup: { id: number; text: string; kind: PickupSpot['kind'] } | null;
   kills: number;
+  aliveEnemies: number;
   deaths: number;
   time: number;
   weapon: number;
@@ -55,6 +57,8 @@ export type Snapshot = {
     damage: number;
     absorbed: number;
     angle: number;
+    sourceX: number;
+    sourceZ: number;
     target: number;
   } | null;
 };
@@ -301,6 +305,7 @@ export class Arena {
     reloadLabel: '',
     pickup: null,
     kills: 0,
+    aliveEnemies: 0,
     deaths: 0,
     time: 180,
     weapon: 3,
@@ -1092,6 +1097,7 @@ export class Arena {
       reloadLabel: '',
       pickup: null,
       kills: 0,
+      aliveEnemies: this.level.enemies,
       deaths: 0,
       time: this.level.duration,
       weapon: selected,
@@ -1426,7 +1432,7 @@ export class Arena {
           if (bot.health <= 0) {
             bot.alive = false;
             bot.group.visible = false;
-            bot.respawn = 3 + Math.random() * 2;
+            bot.respawn = 7 + Math.random() * 3;
             this.state.kills++;
             this.addFeed(
               `${headshot ? '精准命中！' : '已擦除'} 涂鸦 ${String(bot.id + 1).padStart(2, '0')}`,
@@ -1530,21 +1536,23 @@ export class Arena {
       if (!bot.alive) {
         bot.respawn -= dt;
         if (bot.respawn <= 0) {
-          const candidates = this.level.spawns.filter(
-            (p) =>
-              Math.hypot(
-                p.x - this.camera.position.x,
-                p.z - this.camera.position.z,
-              ) > 12,
+          const spawn = enemySpawn(
+            this.level.spawns,
+            this.camera.position,
+            this.bots.filter((b) => b.alive).map((b) => b.group.position),
+            bot.group.position,
+            this.level.obstacles,
           );
-          const spawn =
-            candidates[Math.floor(Math.random() * candidates.length)] ||
-            this.level.spawns[3];
+          if (!spawn) {
+            bot.respawn = 1;
+            continue;
+          }
           bot.group.position.set(spawn.x, 0, spawn.z);
           bot.health = 100;
           bot.alive = true;
           bot.group.visible = true;
-          bot.cooldown = 1.5;
+          bot.cooldown = 2.5;
+          bot.target.copy(bot.group.position);
           bot.repath = 0;
           bot.healthBar.scale.x = 0.79;
           bot.flash = 0;
@@ -1664,10 +1672,12 @@ export class Arena {
             id: ++this.hitSerial,
             damage: damage - received.absorbed,
             absorbed: received.absorbed,
-            angle: this.yaw - Math.atan2(dx, dz),
+            angle: damageBearing(this.camera.position, pos, this.yaw),
+            sourceX: pos.x,
+            sourceZ: pos.z,
             target: bot.id + 1,
           };
-          this.hurtTime = 0.72;
+          this.hurtTime = 1.25;
           this.sound('hurt');
           if (this.state.health <= 0) {
             this.state.deaths++;
@@ -1687,24 +1697,24 @@ export class Arena {
     }
   }
   private respawnPlayer() {
-    let best = this.level.spawns[0],
-      bestDistance = -1;
-    for (const spawn of this.level.spawns) {
-      const nearest = Math.min(
-        ...this.bots
-          .filter((b) => b.alive)
-          .map((b) =>
-            Math.hypot(
-              b.group.position.x - spawn.x,
-              b.group.position.z - spawn.z,
+    const ranked = this.level.spawns
+      .map((spawn) => ({
+        spawn,
+        distance: Math.min(
+          60,
+          ...this.bots
+            .filter((b) => b.alive)
+            .map((b) =>
+              Math.hypot(
+                b.group.position.x - spawn.x,
+                b.group.position.z - spawn.z,
+              ),
             ),
-          ),
-      );
-      if (nearest > bestDistance) {
-        best = spawn;
-        bestDistance = nearest;
-      }
-    }
+        ),
+      }))
+      .sort((a, b) => b.distance - a.distance);
+    const safest = ranked.filter((p) => p.distance >= ranked[0].distance - 3);
+    const best = safest[Math.floor(Math.random() * safest.length)].spawn;
     this.camera.position.set(best.x, 1.72, best.z);
     this.motion = createMotion(this.camera.position.x, this.camera.position.z);
     this.previousMotion = { x: this.motion.x, z: this.motion.z, feet: 0 };
@@ -2125,6 +2135,19 @@ export class Arena {
     this.drawMap();
   }
   private emit() {
+    this.state.aliveEnemies = this.bots.filter((b) => b.alive).length;
+    if (this.hurtTime > 0 && this.state.lastHurt) {
+      const hit = this.state.lastHurt;
+      const angle =
+        Math.round(
+          damageBearing(
+            this.camera.position,
+            { x: hit.sourceX, z: hit.sourceZ },
+            this.yaw,
+          ) * 60,
+        ) / 60;
+      if (angle !== hit.angle) this.state.lastHurt = { ...hit, angle };
+    }
     this.state.hit = this.hitTime > 0;
     this.state.hurt = this.hurtTime > 0;
     const next = {

@@ -30,6 +30,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Progress } from '@/components/ui/progress';
 import { LEVELS } from './game/levels';
 import { MUSIC } from './game/audio';
+import { damageLabel } from './game/combat-feedback';
 import { Arena, drawWeapon, WEAPONS, type Snapshot } from './game/arena';
 import { browserGameTools } from './game/webmcp';
 
@@ -43,6 +44,7 @@ const initial: Snapshot = {
   reloadLabel: '',
   pickup: null,
   kills: 0,
+  aliveEnemies: 0,
   deaths: 0,
   time: 180,
   weapon: 3,
@@ -288,7 +290,8 @@ export default function Home() {
                   : 'DEATHMATCH'}
             </span>
             <small>
-              第 {game.level + 1} 关 · {level.enemies} 名 AI 对手
+              第 {game.level + 1} 关 · 敌人 {game.aliveEnemies} /{' '}
+              {level.enemies} 存活
             </small>
           </div>
           <div className="match-score">
@@ -412,9 +415,13 @@ export default function Home() {
                       transform: `translate(-50%,-50%) rotate(${game.lastHurt.angle}rad)`,
                     }}
                   >
+                    <i className="damage-arc" />
                     <span>▼</span>
                   </div>
                   <p>
+                    <b className="damage-bearing-label">
+                      {damageLabel(game.lastHurt.angle)}来袭
+                    </b>
                     {game.lastHurt.damage > 0
                       ? '−' + game.lastHurt.damage + ' HP'
                       : '护甲抵挡'}{' '}
@@ -731,7 +738,7 @@ export default function Home() {
                   <strong>{item.name}</strong>
                   <span>{item.tactic}</span>
                   <small>
-                    {item.enemies} 名对手 · {item.goal} 次击杀
+                    最多 {item.enemies} 名对手 · {item.goal} 次击杀
                   </small>
                 </div>
                 <ChevronRight size={17} className="level-card-arrow" />

@@ -1680,23 +1680,48 @@ kbd {
   inset: 0;
   pointer-events: none;
   z-index: 4;
-  animation: damage-wash 0.72s ease-out both;
+  animation: incoming-hit 1.25s ease-out both;
 }
 .damage-direction {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 260px;
-  height: 260px;
+  width: clamp(190px, 32vh, 320px);
+  height: clamp(190px, 32vh, 320px);
   pointer-events: none;
 }
 .damage-direction > span {
   position: absolute;
   left: calc(50% - 14px);
-  top: -3px;
+  top: 12px;
   font: 32px Arial;
   color: #cf3c40;
   text-shadow: 0 1px 3px #fff;
+}
+.damage-arc {
+  position: absolute;
+  inset: 0;
+  border: 9px solid transparent;
+  border-top-color: #ff5349;
+  border-radius: 50%;
+  filter: drop-shadow(0 0 5px #842024) drop-shadow(0 1px 1px white);
+}
+.damage-bearing-label {
+  display: inline-block;
+  margin-right: 12px;
+  color: #fff2b0;
+  font-size: 17px;
+}
+@keyframes incoming-hit {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 .received-hit > p {
   position: absolute;
