@@ -421,32 +421,6 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              {game.lastHit && (
-                <div
-                  key={game.lastHit.id}
-                  className={`hit-feedback ${game.lastHit.killed ? 'is-kill' : ''}`}
-                >
-                  <strong className="damage-number">
-                    {game.lastHit.killed ? '✕ ' : ''}−{game.lastHit.damage}
-                  </strong>
-                  <span>
-                    {game.lastHit.killed
-                      ? '击杀确认'
-                      : game.lastHit.headshot
-                        ? '爆头命中'
-                        : '命中'}
-                  </span>
-                  <div className="target-health">
-                    <span>
-                      涂鸦 {String(game.lastHit.target).padStart(2, '0')}
-                      <b>{game.lastHit.health} / 100</b>
-                    </span>
-                    <i>
-                      <b style={{ width: game.lastHit.health + '%' }} />
-                    </i>
-                  </div>
-                </div>
-              )}
               {game.hurt && game.lastHurt && (
                 <div
                   key={game.lastHurt.id}

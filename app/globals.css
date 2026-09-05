@@ -1593,88 +1593,6 @@ kbd {
 .crosshair.kill-confirmed i {
   background: #d7404a;
 }
-.hit-feedback {
-  position: absolute;
-  top: calc(50% + 27px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
-  min-width: 180px;
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  pointer-events: none;
-  animation: hit-confirmation 1.4s ease-out forwards;
-  color: #2e564f;
-  text-shadow: 0 1px 3px #fff;
-}
-.damage-number {
-  font: bold 31px var(--hand);
-  line-height: 1.2;
-  color: #da673d;
-}
-.hit-feedback > span {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 2px;
-  margin-top: 4px;
-}
-.hit-feedback.is-kill .damage-number,
-.hit-feedback.is-kill > span {
-  color: #c73142;
-}
-.target-health {
-  margin-top: 10px;
-  background: #fffdf0ed;
-  border: 1px solid #938c79;
-  border-radius: 3px;
-  padding: 7px 9px;
-  min-width: 160px;
-  text-shadow: none;
-}
-.target-health > span {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-  font-size: 10px;
-  color: #686555;
-}
-.target-health > span > b {
-  font-size: 10px;
-  font-weight: 600;
-  color: #b24441;
-}
-.target-health > i {
-  display: block;
-  height: 5px;
-  background: #dedacb;
-  margin-top: 6px;
-  border-radius: 1px;
-  overflow: hidden;
-}
-.target-health > i > b {
-  display: block;
-  height: 100%;
-  background: #e56859;
-}
-@keyframes hit-confirmation {
-  0% {
-    opacity: 1;
-    transform: translate(-50%, 4px) scale(1.12);
-  }
-  12% {
-    opacity: 1;
-    transform: translate(-50%, 0) scale(1);
-  }
-  72% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -7px);
-  }
-}
 .received-hit {
   position: absolute;
   inset: 0;
@@ -1814,9 +1732,6 @@ kbd {
   .critical-health:before {
     animation: none;
     opacity: 0.6;
-  }
-  .hit-feedback {
-    animation-name: hit-static;
   }
   .received-hit,
   .hurt:after {
