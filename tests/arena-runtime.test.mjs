@@ -684,3 +684,35 @@ test('PVP kill feed names both players and does not repeat snapshot events', asy
   assert.equal(arena.state.feed.length, 1);
   assert.equal(arena.state.feed[0].text, '甲 击杀了 乙');
 });
+
+test('PVP health and hit feedback reach the HUD immediately on receipt', async () => {
+  const { Battle } = await import('../server/battle.ts');
+  const battle = new Battle('desktop');
+  battle.join('a', 'A');
+  battle.join('b', 'B');
+  const arena = fixture();
+  arena.pvp = { id: 'a', send() {} };
+  arena.pvpEvent = 0;
+  arena.applyPvp(battle.snapshot());
+  const updates = [];
+  arena.notify = (s) => updates.push(s);
+  battle.players.get('a').health = 70;
+  battle.events = [
+    { id: 1, kind: 'hit', actor: 'b', target: 'a', damage: 30, health: 70 },
+  ];
+  arena.applyPvp(battle.snapshot());
+  assert.equal(updates.length, 1, 'no animation frame or HUD timer required');
+  assert.equal(updates[0].health, 70);
+  assert.equal(updates[0].hurt, true);
+  battle.players.get('b').health = 55;
+  battle.events = [
+    { id: 2, kind: 'hit', actor: 'a', target: 'b', damage: 45, health: 55 },
+  ];
+  arena.applyPvp(battle.snapshot());
+  assert.equal(updates.length, 2);
+  assert.equal(updates[1].hit, true);
+  assert.ok(Math.abs(arena.bots[0].healthBar.scale.x - 0.4345) < 1e-10);
+  assert.equal(arena.bots[0].flash, 0.14);
+  arena.applyPvp(battle.snapshot());
+  assert.equal(updates.length, 2, 'duplicate snapshots do not repeat feedback');
+});

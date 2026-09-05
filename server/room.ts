@@ -36,6 +36,12 @@ export class BattleRoom extends Room {
       validMode(options.mode) ? options.mode : 'classic',
     );
     if (options.private) void this.setPrivate(true);
+    let publishTime = 0;
+    const publish = () => {
+      this.broadcast('snapshot', this.battle.snapshot());
+      this.battle.events = [];
+      publishTime = 0;
+    };
     this.onMessage('*', (client, type, data) => {
       const now = Date.now();
       let rate = this.rates.get(client.sessionId);
@@ -50,7 +56,11 @@ export class BattleRoom extends Room {
       if (type === 'ping' && typeof data === 'number')
         client.send('pong', data);
       if (type === 'input') this.battle.input(id, data);
-      if (type === 'fire') this.battle.shot(id);
+      if (type === 'fire') {
+        this.battle.shot(id);
+        // Confirm damage immediately instead of waiting for the movement tick.
+        if (this.battle.events.some((event) => event.kind === 'hit')) publish();
+      }
       if (type === 'reload') this.battle.reload(id);
       if (type === 'jump' && this.battle.phase === 'playing' && p.health > 0)
         p.motion.jumpBuffer = 0.13;
@@ -60,14 +70,11 @@ export class BattleRoom extends Room {
       if (type === 'start' && this.battle.start(id)) void this.lock();
       if (type === 'sync') client.send('snapshot', this.battle.snapshot());
     });
-    let publishTime = 0;
     this.setFixedTimestep(({ dt }) => {
       this.battle.step(dt);
       publishTime += dt;
       if (publishTime >= (this.battle.phase === 'playing' ? 1 / 15 : 0.2)) {
-        publishTime = 0;
-        this.broadcast('snapshot', this.battle.snapshot());
-        this.battle.events = [];
+        publish();
       }
       if (this.battle.phase === 'ended' && this.locked) void this.unlock();
     }, 30);

@@ -1149,6 +1149,8 @@ export class Arena {
     if (!this.pvp) return;
     const own = snapshot.players.find((p) => p.id === this.pvp!.id);
     if (!own) return;
+    let immediateFeedback =
+      own.health !== this.state.health || own.armor !== this.state.armor;
     this.pvpMode = snapshot.mode || 'classic';
     const respawn = this.state.health <= 0 && own.health > 0;
     const historical =
@@ -1247,6 +1249,7 @@ export class Arena {
         label.userData.playerName = p.name;
         label.scale.set(2.4, 1.2 / (p.crouch ? 0.65 : 1), 1);
       }
+      if (p.health < b.health) b.flash = 0.14;
       b.health = p.health;
       b.healthBar.scale.x = (0.79 * p.health) / 100;
       b.target.set(p.motion.x, p.motion.feet, p.motion.z);
@@ -1261,6 +1264,7 @@ export class Arena {
       if (event.id <= this.pvpEvent) continue;
       this.pvpEvent = event.id;
       if (event.kind === 'hit' && event.health === 0 && event.target) {
+        immediateFeedback = true;
         const killer =
           snapshot.players.find((p) => p.id === event.actor)?.name || '玩家';
         const victim =
@@ -1295,6 +1299,7 @@ export class Arena {
         }
       }
       if (event.kind === 'hit' && event.target === own.id) {
+        immediateFeedback = true;
         this.state.lastHurt = {
           id: ++this.hitSerial,
           damage: event.damage || 0,
@@ -1312,6 +1317,7 @@ export class Arena {
         this.sound('hurt');
       }
       if (event.kind === 'hit' && event.actor === own.id) {
+        immediateFeedback = true;
         this.hitTime = 0.32;
         this.state.lastHit = {
           id: ++this.hitSerial,
@@ -1324,6 +1330,8 @@ export class Arena {
         this.sound(event.health === 0 ? 'kill' : 'hit');
       }
     }
+    // Combat feedback bypasses the 10 Hz HUD updates used for routine status.
+    if (immediateFeedback) this.emit();
   }
   private sendPvpInput() {
     if (!this.pvp) return;
