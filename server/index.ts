@@ -12,10 +12,10 @@ const server = new Server({
   greet: false,
   express: (app) => {
     app.get('/health', (_req, res) =>
-      res.json({ status: 'ok', service: 'paperstrike-pvp', protocol: 1 }),
+      res.json({ status: 'ok', service: 'paperstrike-pvp', protocol: 2 }),
     );
   },
 });
-server.define('battle', BattleRoom).filterBy(['device']);
+server.define('battle', BattleRoom).filterBy(['device', 'mode']);
 await server.listen(port, '0.0.0.0');
 console.log(`Paperstrike PVP listening on ${port}`);

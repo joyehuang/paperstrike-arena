@@ -8,6 +8,8 @@ import {
   devicePool,
   type DevicePool,
   type PvpSnapshot,
+  PVP_MODES,
+  type PvpMode,
 } from '../game/pvp-protocol';
 import { damageLabel } from '../game/combat-feedback';
 
@@ -27,12 +29,25 @@ function Match({
   const [arena, setArena] = useState<Arena | null>(null),
     [game, setGame] = useState<Snapshot | null>(null),
     [error, setError] = useState('');
+  const [rtt, setRtt] = useState<number | null>(null);
   useEffect(() => {
     if (!host.current || !map.current) return;
     const a = new Arena(host.current, map.current, setGame, setError);
     a.pvp = { id: room.sessionId, send: (kind, data) => room.send(kind, data) };
+    const stop = room.onMessage('snapshot', (s: PvpSnapshot) => a.applyPvp(s));
+    const pong = room.onMessage('pong', (sent: number) => {
+      const ms = Math.round(performance.now() - sent);
+      a.pvpRtt = ms;
+      setRtt(ms);
+    });
+    const ping = setInterval(() => room.send('ping', performance.now()), 2000);
     setArena(a);
-    return () => a.dispose();
+    return () => {
+      stop();
+      pong();
+      clearInterval(ping);
+      a.dispose();
+    };
   }, [room]);
   useEffect(() => {
     arena?.applyPvp(snapshot);
@@ -68,7 +83,10 @@ function Match({
             HP {Math.ceil(game?.health ?? 100)} · 护甲{' '}
             {Math.ceil(game?.armor ?? 0)}
           </span>
-          <strong>{Math.ceil(snapshot.remaining)} 秒</strong>
+          <strong>
+            {Math.ceil(game?.time ?? snapshot.remaining)} 秒 ·{' '}
+            {game?.fps ?? '—'} FPS · {rtt === null ? '测延迟中' : `${rtt} ms`}
+          </strong>
           <span>
             {game?.ammo ?? 0} / {game?.reserve ?? 0} ·{' '}
             {WEAPONS[game?.weapon ?? 3].name}
@@ -117,6 +135,7 @@ function Match({
 }
 export default function PvpPage() {
   const [endpoint, setEndpoint] = useState(''),
+    [mode, setMode] = useState<PvpMode>('classic'),
     [device, setDevice] = useState<DevicePool>('desktop'),
     [name, setName] = useState('新画手'),
     [code, setCode] = useState('');
@@ -150,7 +169,7 @@ export default function PvpPage() {
     setError('');
     try {
       const client = new Client(endpoint),
-        options = { name, device, touchPoints: navigator.maxTouchPoints };
+        options = { name, device, mode, touchPoints: navigator.maxTouchPoints };
       const r =
         mode === 'quick'
           ? await client.joinOrCreate('battle', options)
@@ -165,8 +184,19 @@ export default function PvpPage() {
       r.reconnection.minUptime = 0;
       setRoom(r);
       setOnline(true);
+      let lastPhase = '',
+        lastUiUpdate = 0;
       r.onMessage('snapshot', (s: PvpSnapshot) => {
-        if (current.current === r) setSnapshot(s);
+        if (current.current !== r) return;
+        const now = performance.now();
+        if (
+          s.phase !== lastPhase ||
+          (s.phase !== 'playing' && now - lastUiUpdate >= 200)
+        ) {
+          lastPhase = s.phase;
+          lastUiUpdate = now;
+          setSnapshot(s);
+        }
       });
       r.onDrop(() => {
         if (current.current === r) setOnline(false);
@@ -237,6 +267,20 @@ export default function PvpPage() {
         <div className="pvp-card">
           <p>邀请朋友：填写昵称后创建房间，系统会生成房间码。</p>
           <label>
+            玩法
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as PvpMode)}
+            >
+              {Object.entries(PVP_MODES).map(([id, item]) => (
+                <option key={id} value={id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p>{PVP_MODES[mode].description} 房间码加入时使用房主的玩法。</p>
+          <label>
             昵称
             <input
               value={name}
@@ -277,6 +321,26 @@ export default function PvpPage() {
       ) : (
         <div className="pvp-card">
           <h2>{snapshot?.phase === 'ended' ? '本局结束' : '等待队友'}</h2>
+          <p>
+            {PVP_MODES[snapshot?.mode || 'classic'].name} ·{' '}
+            {PVP_MODES[snapshot?.mode || 'classic'].description}
+          </p>
+          {snapshot?.mode === 'locked' && (
+            <label>
+              本局武器
+              <select
+                value={own?.weapon ?? 3}
+                disabled={own?.ready}
+                onChange={(e) => room.send('weapon', Number(e.target.value))}
+              >
+                {WEAPONS.map((w, i) => (
+                  <option key={i} value={i}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <p>
             把房间码发给同类设备的朋友。至少两人加入并准备后，房主即可开始。
           </p>
@@ -320,7 +384,7 @@ export default function PvpPage() {
         </p>
       )}
       <p className="pvp-footnote">
-        第一版联机测试：暂未加入占点、排位和武器轮换。断线时会尝试恢复当前房间。
+        占点与排位尚未开放。断线时会尝试恢复当前房间。
       </p>
     </main>
   );

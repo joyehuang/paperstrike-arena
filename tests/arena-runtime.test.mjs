@@ -584,3 +584,33 @@ test('reload mechanical cues occur once at insertion and action contact points',
     );
   }
 });
+
+test('PVP acknowledgements preserve predicted movement and cache overhead nicknames', async () => {
+  const { Battle } = await import('../server/battle.ts');
+  const battle = new Battle('desktop');
+  battle.join('a', 'A');
+  battle.join('b', '朋友 B');
+  const arena = fixture();
+  arena.pvp = { id: 'a', send() {} };
+  arena.pvpEvent = 0;
+  arena.applyPvp(battle.snapshot());
+  const label = arena.bots[0].group.getObjectByName('player-name');
+  assert.ok(label.isSprite, 'nickname always faces the camera');
+  assert.equal(label.userData.playerName, '朋友 B');
+  const version = label.material.map.version;
+  const p = battle.players.get('a');
+  p.input.seq = 42;
+  arena.pvpHistory = new Map([[42, { x: p.motion.x, z: p.motion.z }]]);
+  arena.motion.x = p.motion.x + 0.7;
+  arena.applyPvp(battle.snapshot());
+  assert.equal(
+    arena.motion.x,
+    p.motion.x + 0.7,
+    'do not pull current movement back to old server position',
+  );
+  assert.equal(
+    label.material.map.version,
+    version,
+    'unchanged name does not upload a new texture',
+  );
+});

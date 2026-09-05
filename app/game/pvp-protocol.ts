@@ -1,5 +1,22 @@
 import type { Motion } from './rules';
 export type DevicePool = 'mobile' | 'desktop';
+export const PVP_MODES = {
+  classic: {
+    name: '自由混战',
+    description: '四把武器自由切换，三分钟比击杀。',
+  },
+  rotation: {
+    name: '三杀换枪',
+    description: '累计每三次击杀轮换武器，死亡不重置进度。',
+  },
+  locked: {
+    name: '一枪到底',
+    description: '准备前选定一把武器，本局不能换枪。',
+  },
+} as const;
+export type PvpMode = keyof typeof PVP_MODES;
+export const validMode = (value: unknown): value is PvpMode =>
+  value === 'classic' || value === 'rotation' || value === 'locked';
 export function devicePool(userAgent: string, touchPoints = 0): DevicePool {
   return /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ||
     (/Macintosh/i.test(userAgent) && touchPoints > 1)
@@ -7,6 +24,7 @@ export function devicePool(userAgent: string, touchPoints = 0): DevicePool {
     : 'desktop';
 }
 export type PvpInput = {
+  seq?: number;
   forward: number;
   right: number;
   yaw: number;
@@ -36,6 +54,10 @@ export function parseInput(value: unknown): PvpInput | null {
   )
     return null;
   return {
+    seq:
+      Number.isSafeInteger(v.seq) && Number(v.seq) >= 0
+        ? Number(v.seq)
+        : undefined,
     forward: Math.max(-1, Math.min(1, v.forward as number)),
     right: Math.max(-1, Math.min(1, v.right as number)),
     yaw: (v.yaw as number) % (Math.PI * 2),
@@ -47,6 +69,7 @@ export function parseInput(value: unknown): PvpInput | null {
   };
 }
 export type PvpPlayer = {
+  ack?: number;
   id: string;
   name: string;
   slot: number;
@@ -78,6 +101,7 @@ export type PvpEvent = {
   sourceZ?: number;
 };
 export type PvpSnapshot = {
+  mode?: PvpMode;
   phase: 'waiting' | 'playing' | 'ended';
   device: DevicePool;
   host: string;

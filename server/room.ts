@@ -5,7 +5,7 @@ import {
   type AuthContext,
 } from '@colyseus/core';
 import { Battle } from './battle';
-import { devicePool } from '../app/game/pvp-protocol';
+import { devicePool, validMode } from '../app/game/pvp-protocol';
 
 export class BattleRoom extends Room {
   static active = 0;
@@ -13,14 +13,19 @@ export class BattleRoom extends Room {
   maxClients = 4;
   battle!: Battle;
   private rates = new Map<string, { time: number; count: number }>();
-  onCreate(options: { device?: unknown; private?: boolean }) {
+  onCreate(options: { device?: unknown; private?: boolean; mode?: unknown }) {
     if (options.device !== 'mobile' && options.device !== 'desktop')
       throw new ServerError(400, '请选择有效设备分组');
     if (BattleRoom.active >= Number(process.env.MAX_ROOMS || 32))
       throw new ServerError(503, '房间暂满，请稍后重试');
+    if (options.mode !== undefined && !validMode(options.mode))
+      throw new ServerError(400, '无效的玩法');
     BattleRoom.active++;
     this.registered = true;
-    this.battle = new Battle(options.device);
+    this.battle = new Battle(
+      options.device,
+      validMode(options.mode) ? options.mode : 'classic',
+    );
     if (options.private) void this.setPrivate(true);
     this.onMessage('*', (client, type, data) => {
       const now = Date.now();
@@ -33,6 +38,8 @@ export class BattleRoom extends Room {
       const id = client.sessionId,
         p = this.battle.players.get(id);
       if (!p) return;
+      if (type === 'ping' && typeof data === 'number')
+        client.send('pong', data);
       if (type === 'input') this.battle.input(id, data);
       if (type === 'fire') this.battle.shot(id);
       if (type === 'reload') this.battle.reload(id);
@@ -44,9 +51,15 @@ export class BattleRoom extends Room {
       if (type === 'start' && this.battle.start(id)) void this.lock();
       if (type === 'sync') client.send('snapshot', this.battle.snapshot());
     });
+    let publishTime = 0;
     this.setFixedTimestep(({ dt }) => {
       this.battle.step(dt);
-      this.broadcast('snapshot', this.battle.snapshot());
+      publishTime += dt;
+      if (publishTime >= (this.battle.phase === 'playing' ? 1 / 15 : 0.2)) {
+        publishTime = 0;
+        this.broadcast('snapshot', this.battle.snapshot());
+        this.battle.events = [];
+      }
       if (this.battle.phase === 'ended' && this.locked) void this.unlock();
     }, 30);
   }

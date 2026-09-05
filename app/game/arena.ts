@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { batchSketch, CombatEffects, renderPixelRatio } from './rendering';
 import { enterCombatView } from './presentation';
-import type { PvpLink, PvpSnapshot } from './pvp-protocol';
+import type { PvpLink, PvpSnapshot, PvpMode } from './pvp-protocol';
 import { enemySpawn, damageBearing } from './combat-feedback';
 import { LEVELS, type PickupSpot } from './levels';
 import { PICKUPS, collectSupply, absorbDamage, reloadPose } from './supplies';
@@ -336,6 +336,12 @@ export class Arena {
   pvp: PvpLink | null = null;
   private pvpInputTime = 0;
   private pvpEvent = 0;
+  pvpMode: PvpMode = 'classic';
+  pvpRtt = 0;
+  private pvpSeq = 0;
+  private pvpHistory = new Map<number, { x: number; z: number }>();
+  private pvpInitialized = false;
+  private pvpLastAck = -1;
   private touchForward = 0;
   private touchRight = 0;
   private host: HTMLDivElement;
@@ -882,8 +888,15 @@ export class Arena {
       weapon.position.set(0.27, 1.15, 0.45);
       group.add(weapon);
       const mark = this.textPlane(`0${i + 1}`, 1.1, 0.55, '#a84443', 90);
-      mark.position.set(0, 2.3, 0);
-      group.add(mark);
+      const nameLabel = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: mark.material.map, depthWrite: false }),
+      );
+      mark.geometry.dispose();
+      mark.material.dispose();
+      nameLabel.position.set(0, 2.4, 0);
+      nameLabel.scale.set(1.6, 0.8, 1);
+      nameLabel.name = 'player-name';
+      group.add(nameLabel);
       group.userData.bot = i;
       batchSketch(group);
       const healthBackground = new THREE.Sprite(
@@ -1131,22 +1144,44 @@ export class Arena {
     if (!this.pvp) return;
     const own = snapshot.players.find((p) => p.id === this.pvp!.id);
     if (!own) return;
+    this.pvpMode = snapshot.mode || 'classic';
     const respawn = this.state.health <= 0 && own.health > 0;
-    const error = Math.hypot(
-      this.motion.x - own.motion.x,
-      this.motion.z - own.motion.z,
-    );
-    if (respawn || error > 2) {
+    const historical =
+      own.ack === undefined ? undefined : this.pvpHistory?.get(own.ack);
+    const lead = historical ? 0 : Math.min(0.15, (this.pvpRtt || 0) / 2000);
+    const dx =
+      own.motion.x + own.motion.vx * lead - (historical?.x ?? this.motion.x);
+    const dz =
+      own.motion.z + own.motion.vz * lead - (historical?.z ?? this.motion.z);
+    const error = Math.hypot(dx, dz);
+    if (!this.pvpInitialized || respawn || error > 2) {
       Object.assign(this.motion, own.motion);
       Object.assign(this.previousMotion, {
         x: own.motion.x,
         z: own.motion.z,
         feet: own.motion.feet,
       });
-    } else {
-      this.motion.x += (own.motion.x - this.motion.x) * 0.15;
-      this.motion.z += (own.motion.z - this.motion.z) * 0.15;
+      this.pvpHistory?.clear();
+      this.pvpInitialized = true;
+    } else if (
+      error > 0.12 &&
+      (own.ack === undefined || own.ack !== this.pvpLastAck)
+    ) {
+      const blend = 0.25;
+      this.motion.x += dx * blend;
+      this.motion.z += dz * blend;
+      this.previousMotion.x += dx * blend;
+      this.previousMotion.z += dz * blend;
+      for (const point of this.pvpHistory?.values() || []) {
+        point.x += dx * blend;
+        point.z += dz * blend;
+      }
     }
+    this.pvpLastAck = own.ack ?? -1;
+    if (own.ack !== undefined)
+      for (const seq of this.pvpHistory?.keys() || []) {
+        if (seq < own.ack) this.pvpHistory.delete(seq);
+      }
     if (this.state.weapon !== own.weapon) {
       this.state.weapon = own.weapon;
       this.buildGun();
@@ -1185,6 +1220,22 @@ export class Arena {
       b.alive = !!p && p.health > 0;
       b.group.visible = b.alive;
       if (!p) return;
+      const label = b.group.getObjectByName('player-name') as
+        | THREE.Sprite
+        | undefined;
+      if (label && label.userData.playerName !== p.name) {
+        const canvas = label.material.map!.image as HTMLCanvasElement;
+        canvas.width = 512;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#274756';
+        ctx.font = 'bold 44px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.name, 256, 128, 490);
+        label.material.map!.needsUpdate = true;
+        label.userData.playerName = p.name;
+        label.scale.set(2.4, 1.2 / (p.crouch ? 0.65 : 1), 1);
+      }
       b.health = p.health;
       b.healthBar.scale.x = (0.79 * p.health) / 100;
       b.target.set(p.motion.x, p.motion.feet, p.motion.z);
@@ -1249,10 +1300,16 @@ export class Arena {
         this.sound(event.health === 0 ? 'kill' : 'hit');
       }
     }
-    this.emit();
   }
   private sendPvpInput() {
+    if (!this.pvp) return;
+    this.pvpHistory ||= new Map();
+    this.pvpSeq = (this.pvpSeq || 0) + 1;
+    this.pvpHistory.set(this.pvpSeq, { x: this.motion.x, z: this.motion.z });
+    if (this.pvpHistory.size > 120)
+      this.pvpHistory.delete(this.pvpHistory.keys().next().value!);
     this.pvp?.send('input', {
+      seq: this.pvpSeq,
       forward:
         Number(this.keys.has('KeyW')) -
         Number(this.keys.has('KeyS')) +
@@ -1511,6 +1568,7 @@ export class Arena {
     if (this.pvp) this.sendPvpInput();
   }
   selectWeapon(index: number) {
+    if (this.pvp && this.pvpMode !== 'classic') return;
     if (!Number.isInteger(index) || index < 0 || index > 3) return false;
     this.state.weapon = index;
     this.pvp?.send('weapon', index);
@@ -2382,6 +2440,7 @@ export class Arena {
   };
 
   private drawMap() {
+    if (this.pvp) return;
     const ctx = this.map.getContext('2d');
     if (!ctx) return;
     const w = this.map.width,

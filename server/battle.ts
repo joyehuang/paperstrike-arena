@@ -14,6 +14,7 @@ import {
   type PvpInput,
   type PvpSnapshot,
   type PvpEvent,
+  type PvpMode,
 } from '../app/game/pvp-protocol';
 import { absorbDamage, collectSupply, PICKUPS } from '../app/game/supplies';
 
@@ -48,8 +49,10 @@ export class Battle {
   serial = 0;
   pickups = LEVELS[0].pickups.map((p) => ({ ...p, remaining: 0 }));
   device: DevicePool;
-  constructor(device: DevicePool) {
+  mode: PvpMode;
+  constructor(device: DevicePool, mode: PvpMode = 'classic') {
     this.device = device;
+    this.mode = mode;
   }
   join(id: string, name: string) {
     if (this.players.size >= 4 || this.phase === 'playing')
@@ -103,6 +106,7 @@ export class Battle {
     this.pickups.forEach((p) => (p.remaining = 0));
     for (const p of this.players.values()) {
       p.kills = p.deaths = 0;
+      if (this.mode === 'rotation') p.weapon = 0;
       this.respawn(p);
     }
     return true;
@@ -132,6 +136,12 @@ export class Battle {
   switchWeapon(id: string, w: unknown) {
     const p = this.players.get(id);
     if (!p || !Number.isInteger(w) || Number(w) < 0 || Number(w) > 3) return;
+    if (this.mode === 'locked' && p.ready && this.phase !== 'playing') return;
+    if (
+      this.mode === 'rotation' ||
+      (this.mode === 'locked' && this.phase === 'playing')
+    )
+      return;
     p.weapon = Number(w);
     p.reload = 0;
     p.cooldown = 0.22;
@@ -235,6 +245,15 @@ export class Battle {
           victim.reload = 0;
           victim.input = idleInput();
         }
+      }
+    }
+    if (this.mode === 'rotation') {
+      const next = Math.floor(p.kills / 3) % WEAPONS.length;
+      if (p.weapon !== next) {
+        p.weapon = next;
+        p.reload = 0;
+        p.cooldown = 0.25;
+        p.input.aim = false;
       }
     }
     if (p.clips[p.weapon] === 0) this.reload(id);
@@ -356,6 +375,7 @@ export class Battle {
   }
   snapshot(): PvpSnapshot {
     return {
+      mode: this.mode,
       phase: this.phase,
       device: this.device,
       host: this.host,
@@ -363,6 +383,7 @@ export class Battle {
       events: this.events,
       pickups: this.pickups.map((p) => p.remaining),
       players: [...this.players.values()].map((p) => ({
+        ack: p.input.seq,
         id: p.id,
         name: p.name,
         slot: p.slot,

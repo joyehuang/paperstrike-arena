@@ -13,6 +13,41 @@ function match() {
   assert.equal(b.start('a'), true);
   return b;
 }
+test('locked and rotation modes enforce weapon rules on the server', () => {
+  const locked = new Battle('desktop', 'locked');
+  locked.join('a', 'A');
+  locked.join('b', 'B');
+  locked.switchWeapon('a', 2);
+  locked.players.forEach((p) => (p.ready = true));
+  locked.start('a');
+  locked.switchWeapon('a', 0);
+  assert.equal(locked.players.get('a').weapon, 2);
+  const b = new Battle('desktop', 'rotation');
+  b.join('a', 'A');
+  b.join('b', 'B');
+  b.players.forEach((p) => (p.ready = true));
+  b.start('a');
+  const a = b.players.get('a'),
+    victim = b.players.get('b');
+  b.switchWeapon('a', 3);
+  assert.equal(a.weapon, 0);
+  a.motion.x = victim.motion.x = 0;
+  a.motion.z = 10;
+  victim.motion.z = 5;
+  for (let n = 0; n < 3; n++) {
+    victim.health = 1;
+    victim.immune = 0;
+    a.cooldown = 0;
+    b.shot('a');
+  }
+  assert.equal(a.kills, 3);
+  assert.equal(a.weapon, 1);
+  a.health = 0;
+  a.respawn = 0;
+  b.step();
+  assert.equal(a.weapon, 1, 'death preserves rotation progress');
+  assert.equal(b.snapshot().mode, 'rotation');
+});
 test('PVP device classification and input validation reject malformed movement', () => {
   assert.equal(devicePool('iPhone'), 'mobile');
   assert.equal(devicePool('Android'), 'mobile');

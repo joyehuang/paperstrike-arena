@@ -2140,7 +2140,8 @@ kbd {
   margin: 14px 0;
   font-size: 14px;
 }
-.pvp-card input {
+.pvp-card input,
+.pvp-card select {
   background: #f7f4e9;
   border: 1px solid #9daa9b;
   padding: 12px;
