@@ -39,6 +39,14 @@ Static geometry and pencil outlines are batched. Particles and bullet trails sha
 
 `npm run build` produces the Cloudflare Worker and client assets. `npx tsc --noEmit` checks types. `node --test tests/*.test.mjs` runs the movement, navigation and ray intersection checks (Node 24).
 
+## Vercel
+
+Production: https://paperstrike-arena.vercel.app
+
+`vercel.json` uses `npm run build:vercel` to export this same game as static HTML, JavaScript, CSS and local audio in `dist/client`. The build script sets `PAPERSTRIKE_TARGET=vercel`, which selects Vinext's static export and omits Worker-only plugins. No server functions or database are needed for this version.
+
+Run `vercel deploy --prod` from the linked project to build and publish on Vercel. The standard `npm run build` continues to target the original Sites host. Use Vercel's cloud build when the native Windows prerender process fails during shutdown.
+
 ## Implementation
 
 - `app/page.tsx`: Chinese game UI, HUD, inventory, help and settings.

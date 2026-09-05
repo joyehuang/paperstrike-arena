@@ -1,0 +1,9 @@
+.git
+.env*
+.wrangler
+.vinext
+work
+tests
+node_modules
+dist
+*.tsbuildinfo

@@ -35,6 +35,14 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
+  // Vercel serves the exported browser game directly, with no Worker bindings.
+  if (process.env.PAPERSTRIKE_TARGET === 'vercel') {
+    return {
+      css: { postcss: { plugins: [tailwindcss()] } },
+      plugins: [vinext()],
+    };
+  }
+
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
