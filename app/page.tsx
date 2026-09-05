@@ -1,5 +1,6 @@
 'use client';
 import { memo, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   ArrowUpRight,
   Crosshair,
@@ -13,6 +14,10 @@ import {
   Mouse,
   Keyboard,
   Pause,
+  Shield,
+  PackagePlus,
+  Music2,
+  ChevronRight,
 } from 'lucide-react';
 import {
   Dialog,
@@ -21,12 +26,22 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Progress } from '@/components/ui/progress';
+import { LEVELS } from './game/levels';
+import { MUSIC } from './game/audio';
 import { Arena, drawWeapon, WEAPONS, type Snapshot } from './game/arena';
 import { browserGameTools } from './game/webmcp';
 
 const initial: Snapshot = {
   phase: 'ready',
   health: 100,
+  armor: 0,
+  level: 0,
+  won: false,
+  reloadProgress: 0,
+  reloadLabel: '',
+  pickup: null,
   kills: 0,
   deaths: 0,
   time: 180,
@@ -79,6 +94,50 @@ const WeaponDrawing = memo(function WeaponDrawing({
   );
 });
 
+const LevelMap = memo(function LevelMap({ index }: { index: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const ctx = ref.current?.getContext('2d');
+    if (!ctx) return;
+    const level = LEVELS[index];
+    ctx.clearRect(0, 0, 100, 100);
+    ctx.fillStyle = '#fcfaf1';
+    ctx.fillRect(0, 0, 100, 100);
+    for (const o of level.obstacles) {
+      ctx.fillStyle = o.kind === 'wall' ? level.color : '#c9c2ac';
+      ctx.strokeStyle = '#696956';
+      ctx.lineWidth = 0.6;
+      const x = ((o.x - o.w / 2 + 22) * 100) / 44,
+        y = ((o.z - o.d / 2 + 22) * 100) / 44;
+      ctx.fillRect(x, y, (o.w * 100) / 44, (o.d * 100) / 44);
+      ctx.strokeRect(x, y, (o.w * 100) / 44, (o.d * 100) / 44);
+    }
+    for (const p of level.pickups) {
+      ctx.fillStyle =
+        p.kind === 'health'
+          ? '#25976c'
+          : p.kind === 'shield'
+            ? '#477fc1'
+            : '#d4982b';
+      ctx.fillRect(
+        ((p.x + 22) * 100) / 44 - 1.8,
+        ((p.z + 22) * 100) / 44 - 1.8,
+        3.6,
+        3.6,
+      );
+    }
+  }, [index]);
+  return (
+    <canvas
+      ref={ref}
+      width={100}
+      height={100}
+      aria-hidden="true"
+      className="level-map-preview"
+    />
+  );
+});
+
 export default function Home() {
   const scene = useRef<HTMLDivElement>(null),
     minimap = useRef<HTMLCanvasElement>(null),
@@ -89,42 +148,45 @@ export default function Home() {
     [settings, setSettings] = useState(false),
     [sensitivity, setSensitivity] = useState(45),
     [volume, setVolume] = useState(55),
+    [musicVolume, setMusicVolume] = useState(28),
     [error, setError] = useState(''),
     [loaded, setLoaded] = useState(false),
     [fullscreen, setFullscreen] = useState(false),
     [immersive, setImmersive] = useState(false),
     [motionAmount, setMotionAmount] = useState(25);
   useEffect(() => {
-    if (!scene.current || !minimap.current) return;
-    try {
-      const instance = new Arena(
-        scene.current,
-        minimap.current,
-        setGame,
-        setError,
-      );
-      arena.current = instance;
-      const cleanup = browserGameTools(instance);
-      setLoaded(true);
-      return () => {
-        cleanup();
-        instance.dispose();
-        arena.current = null;
-      };
-    } catch {
-      setError(
-        '三维画面未能启动。请使用支持 WebGL 的桌面浏览器，并开启硬件加速。',
-      );
-    }
+    let instance: Arena | null = null;
+    let cleanup = () => {};
+    // Initialize after layout so the renderer starts with the canvas's measured size.
+    const frame = requestAnimationFrame(() => {
+      if (!scene.current || !minimap.current) return;
+      try {
+        instance = new Arena(scene.current, minimap.current, setGame, setError);
+        arena.current = instance;
+        cleanup = browserGameTools(instance);
+        setLoaded(true);
+      } catch {
+        setError(
+          '三维画面未能启动。请使用支持 WebGL 的桌面浏览器，并开启硬件加速。',
+        );
+      }
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      cleanup();
+      instance?.dispose();
+      arena.current = null;
+    };
   }, []);
   useEffect(() => {
     if (arena.current) {
       arena.current.muted = muted;
       arena.current.volume = volume / 100;
+      arena.current.musicVolume = musicVolume / 100;
       arena.current.sensitivity = sensitivity / 45;
       arena.current.motionAmount = motionAmount / 100;
     }
-  }, [muted, volume, sensitivity, motionAmount]);
+  }, [muted, volume, musicVolume, sensitivity, motionAmount]);
   useEffect(() => {
     const listener = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', listener);
@@ -136,7 +198,12 @@ export default function Home() {
       arena.current?.start();
     },
     overlay = ['ready', 'paused', 'ended'].includes(game.phase),
-    weapon = WEAPONS[game.weapon];
+    weapon = WEAPONS[game.weapon],
+    level = LEVELS[game.level],
+    track = MUSIC[level.music as keyof typeof MUSIC];
+  const advance = () => {
+    if (arena.current?.selectLevel(game.level + 1)) launch();
+  };
   const leaveCombat = () => {
     arena.current?.pause();
     setImmersive(false);
@@ -148,7 +215,7 @@ export default function Home() {
       className={`app ${fullscreen ? 'is-fullscreen' : ''} ${immersive ? 'play-mode' : ''}`}
     >
       <header className="site-header">
-        <a href="/" className="brand" aria-label="Paperstrike 首页">
+        <Link href="/" className="brand" aria-label="Paperstrike 首页">
           <span className="brand-icon">
             <Crosshair size={29} strokeWidth={1.7} />
           </span>
@@ -156,14 +223,14 @@ export default function Home() {
             PAPER<span className="strike-word">STRIKE</span>
             <i>®</i>
           </span>
-        </a>
+        </Link>
         <div className="header-note">
           a little ink. a lot of action.<span className="note-arrow">↴</span>
         </div>
         <div className="header-actions">
           <span className="prototype-tag">
             <span />
-            可玩原型 v0.2
+            可玩原型 v0.3
           </span>
           <button
             className="icon-button"
@@ -190,7 +257,7 @@ export default function Home() {
         <div className="section-heading">
           <div className="arena-label">
             <span className="ink-dot" />
-            自由混战<span className="slash">/</span>
+            闯关混战<span className="slash">/</span>
             <span className="muted">你 vs. 涂鸦小队</span>
           </div>
           <button
@@ -220,14 +287,16 @@ export default function Home() {
                   ? 'PAUSED'
                   : 'DEATHMATCH'}
             </span>
-            <small>3 分钟 · 5 名 AI 对手</small>
+            <small>
+              第 {game.level + 1} 关 · {level.enemies} 名 AI 对手
+            </small>
           </div>
           <div className="match-score">
             <div>
               <span className="score-number">
                 {String(game.kills).padStart(2, '0')}
               </span>
-              <span className="score-label">击杀</span>
+              <span className="score-label">击杀 / 目标 {level.goal}</span>
             </div>
             <div className="match-time">
               <span>
@@ -246,13 +315,14 @@ export default function Home() {
           </div>
           <aside className="minimap-card">
             <div className="minimap-title">
-              THE SCRAPYARD<span>N ↑</span>
+              {level.english}
+              <span>N ↑</span>
             </div>
             <canvas
               ref={minimap}
               width={320}
               height={280}
-              aria-label="小地图：蓝色为玩家，橙色为敌人"
+              aria-label="小地图：蓝色箭头是玩家，橙色圆点是敌人，绿色加号是急救包，黄色方块是弹药，蓝色菱形是护甲"
             />
             <div className="map-legend">
               <span>
@@ -262,7 +332,14 @@ export default function Home() {
                 <i className="enemy-dot" />
                 敌人
               </span>
-              <small>01 / 废稿堆场</small>
+              <small>
+                0{game.level + 1} / {level.name}
+              </small>
+            </div>
+            <div className="supply-legend">
+              <span>＋ 回血</span>
+              <span>▰ 弹药</span>
+              <span>◇ 护甲</span>
             </div>
           </aside>
           <div className="kill-feed" aria-live="polite">
@@ -338,7 +415,9 @@ export default function Home() {
                     <span>▼</span>
                   </div>
                   <p>
-                    −{game.lastHurt.damage} HP{' '}
+                    {game.lastHurt.damage > 0
+                      ? '−' + game.lastHurt.damage + ' HP'
+                      : '护甲抵挡'}{' '}
                     <span>
                       受到 涂鸦 {String(game.lastHurt.target).padStart(2, '0')}{' '}
                       的攻击
@@ -346,8 +425,36 @@ export default function Home() {
                   </p>
                 </div>
               )}
+              {game.pickup && (
+                <output
+                  key={game.pickup.id}
+                  className={'pickup-feedback ' + game.pickup.kind}
+                >
+                  {game.pickup.kind === 'health' ? (
+                    <Heart size={22} />
+                  ) : game.pickup.kind === 'shield' ? (
+                    <Shield size={22} />
+                  ) : (
+                    <PackagePlus size={22} />
+                  )}
+                  <strong>{game.pickup.text}</strong>
+                  <span>已拾取</span>
+                </output>
+              )}
+              {game.reloading && (
+                <div className="reload-feedback">
+                  <div>
+                    <RotateCcw size={15} />
+                    <strong>{game.reloadLabel}</strong>
+                    <span>{game.reloadProgress}%</span>
+                  </div>
+                  <Progress value={game.reloadProgress} aria-label="换弹进度" />
+                </div>
+              )}
               {game.health <= 30 && (
-                <div className="critical-notice">生命值过低 · 寻找掩体</div>
+                <div className="critical-notice">
+                  生命值过低 · 寻找绿色急救包 ＋
+                </div>
               )}
               <div className="movement-indicator">
                 {game.sprinting ? '↑ 冲刺中' : game.crouching ? '↓ 蹲伏中' : ''}
@@ -359,14 +466,24 @@ export default function Home() {
               <div className="start-panel">
                 <span className="handwritten overline">
                   {game.phase === 'ended'
-                    ? 'that’s a wrap!'
+                    ? game.won
+                      ? 'page cleared!'
+                      : 'one more try.'
                     : game.phase === 'paused'
                       ? 'take a breather.'
                       : 'make your mark.'}
                 </span>
                 <h1>
                   {game.phase === 'ended' ? (
-                    '这一局，画完了。'
+                    game.won ? (
+                      game.level === LEVELS.length - 1 ? (
+                        '天台速写，拿下了。'
+                      ) : (
+                        '这张画纸，拿下了。'
+                      )
+                    ) : (
+                      '差一点，再来一局。'
+                    )
                   ) : game.phase === 'paused' ? (
                     '笔先放一下。'
                   ) : (
@@ -399,13 +516,27 @@ export default function Home() {
                   <p>
                     {game.phase === 'paused'
                       ? '战场已暂停，准备好了就继续。'
-                      : '四把枪，一张草稿纸。留下你的战绩。'}
+                      : level.description}
                   </p>
                 )}
+                <div className="level-objective">
+                  <span>
+                    0{game.level + 1} / {level.name}
+                  </span>
+                  <b>
+                    {level.goal} 次击杀 · {level.duration / 60} 分钟
+                  </b>
+                </div>
                 <button
                   className="start-button"
                   disabled={!loaded}
-                  onClick={launch}
+                  onClick={
+                    game.phase === 'ended' &&
+                    game.won &&
+                    game.level < LEVELS.length - 1
+                      ? advance
+                      : launch
+                  }
                 >
                   {game.phase === 'ended' ? (
                     <RotateCcw size={19} />
@@ -416,18 +547,27 @@ export default function Home() {
                     ? game.phase === 'paused'
                       ? '继续战斗'
                       : game.phase === 'ended'
-                        ? '再画一局'
+                        ? game.won && game.level < LEVELS.length - 1
+                          ? '进入下一关'
+                          : '再画一局'
                         : '全屏进入战场'
                     : '正在铺开画纸…'}
                   <span>↗</span>
                 </button>
+                {game.phase === 'ended' &&
+                  game.won &&
+                  game.level < LEVELS.length - 1 && (
+                    <button className="replay-level" onClick={launch}>
+                      重玩这一关
+                    </button>
+                  )}
                 <div className="start-hint">
                   <Mouse size={14} />
                   全屏 · 锁定鼠标<span>·</span>Esc 暂停
                 </div>
                 {immersive && (
                   <button className="leave-combat" onClick={leaveCombat}>
-                    返回武器台 ↙
+                    选择关卡 / 武器 ↙
                   </button>
                 )}
               </div>
@@ -476,12 +616,22 @@ export default function Home() {
                 </div>
               </div>
               <span className="health-caption">
-                {game.health <= 30 ? '寻找掩体' : '生命值'}
+                {game.armor > 0 ? (
+                  <>
+                    <Shield size={14} /> {game.armor} 护甲
+                  </>
+                ) : game.health <= 30 ? (
+                  '寻找急救包'
+                ) : (
+                  '生命值'
+                )}
               </span>
             </div>
             <div className="location-label">
-              <span className="handwritten">The Scrapyard</span>
-              <small>废稿堆场 / ARENA 01</small>
+              <span className="handwritten">{level.english}</span>
+              <small>
+                {level.name} / ARENA 0{game.level + 1}
+              </small>
             </div>
             <div className="ammo-hud">
               <span className="ammo-icon">▰ ▰ ▰</span>
@@ -492,7 +642,7 @@ export default function Home() {
                 </span>
                 <small>
                   {game.reloading
-                    ? '正在换弹…'
+                    ? game.reloadLabel
                     : `${weapon.name} · ${weapon.mode}`}
                 </small>
               </div>
@@ -548,6 +698,62 @@ export default function Home() {
             </button>
           )}
         </div>
+        <section className="level-section" aria-labelledby="level-heading">
+          <div className="level-section-heading">
+            <h2 id="level-heading">换一张画纸。</h2>
+            <span>选择关卡 · 达成击杀目标即可通关</span>
+          </div>
+          <RadioGroup
+            aria-label="选择关卡"
+            value={String(game.level)}
+            onValueChange={(value) => arena.current?.selectLevel(Number(value))}
+            className="level-grid"
+            disabled={game.phase === 'running' || game.phase === 'dead'}
+          >
+            {LEVELS.map((item, index) => (
+              <label
+                htmlFor={'level-' + index}
+                className={
+                  'level-card ' + (game.level === index ? 'selected' : '')
+                }
+                key={item.name}
+              >
+                <LevelMap index={index} />
+                <div className="level-card-info">
+                  <span className="level-number">
+                    关卡 0{index + 1}{' '}
+                    <RadioGroupItem
+                      id={'level-' + index}
+                      value={String(index)}
+                      aria-label={item.name}
+                    />
+                  </span>
+                  <strong>{item.name}</strong>
+                  <span>{item.tactic}</span>
+                  <small>
+                    {item.enemies} 名对手 · {item.goal} 次击杀
+                  </small>
+                </div>
+                <ChevronRight size={17} className="level-card-arrow" />
+              </label>
+            ))}
+          </RadioGroup>
+          <div className="supply-notes">
+            <span>
+              <Heart size={15} />
+              急救包 +40
+            </span>
+            <span>
+              <PackagePlus size={15} />
+              各武器补充弹药
+            </span>
+            <span>
+              <Shield size={15} />
+              护甲 +30，最多 50
+            </span>
+            <small>走近自动拾取 · 18–25 秒刷新</small>
+          </div>
+        </section>
         <div className="loadout-heading">
           <div>
             <span className="handwritten">Pick your pencil.</span>
@@ -625,8 +831,8 @@ export default function Home() {
         <DialogContent className="paper-dialog">
           <DialogTitle>操作手册 / FIELD NOTES</DialogTitle>
           <DialogDescription>
-            在废稿堆场与 5 名 AI 对战，3 分钟内争取更多击杀。阵亡 3
-            秒后重生，所有武器会补满弹药。
+            在三张地图挑战涂鸦小队，3 分钟内分别完成 12、16、20
+            次击杀即可通关。阵亡 3 秒后重生，武器补满弹药。
           </DialogDescription>
           <div className="help-grid">
             {controls.map(([key, action]) => (
@@ -638,7 +844,9 @@ export default function Home() {
           </div>
           <p className="dialog-note">
             小地图蓝点是你，橙点是敌人。利用掩体躲避攻击，蹲下能降低散布，狙击枪开镜可放大
-            4 倍。
+            4 倍。走近绿色急救包恢复 40
+            点生命，黄色弹药箱补充各武器备用弹药，蓝色护甲片增加 30
+            点护甲。补给会在 18–25 秒后刷新。
           </p>
         </DialogContent>
       </Dialog>
@@ -673,6 +881,33 @@ export default function Home() {
                 setVolume(Array.isArray(value) ? value[0] : value)
               }
             />
+          </div>
+          <div className="setting-row">
+            <label>
+              音乐音量<b>{musicVolume}%</b>
+            </label>
+            <Slider
+              aria-label="音乐音量"
+              min={0}
+              max={100}
+              value={[musicVolume]}
+              onValueChange={(value) =>
+                setMusicVolume(Array.isArray(value) ? value[0] : value)
+              }
+            />
+          </div>
+          <div className="music-credit">
+            <Music2 size={17} />
+            <div>
+              <span>本关配乐</span>
+              <a href={track.source} target="_blank" rel="noreferrer">
+                {track.title} ↗
+              </a>
+              <small>Vitalezzz · CC0 / 音效：Kenney</small>
+            </div>
+            <a href="/audio/credits.txt" target="_blank" rel="noreferrer">
+              鸣谢
+            </a>
           </div>
           <div className="setting-row">
             <label>

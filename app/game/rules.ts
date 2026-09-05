@@ -99,11 +99,17 @@ export const SPAWNS = [
   { x: -16, z: 0 },
   { x: 16, z: -4 },
 ];
-export function isBlocked(x: number, z: number, feet = 0, radius = 0.34) {
+export function isBlocked(
+  x: number,
+  z: number,
+  feet = 0,
+  radius = 0.34,
+  obstacles = OBSTACLES,
+) {
   return (
     Math.abs(x) > 20.2 ||
     Math.abs(z) > 20.2 ||
-    OBSTACLES.some(
+    obstacles.some(
       (o) =>
         o.h > feet + 0.4 &&
         Math.abs(x - o.x) < o.w / 2 + radius &&
@@ -111,9 +117,14 @@ export function isBlocked(x: number, z: number, feet = 0, radius = 0.34) {
     )
   );
 }
-export function floorHeight(x: number, z: number, feet: number) {
+export function floorHeight(
+  x: number,
+  z: number,
+  feet: number,
+  obstacles = OBSTACLES,
+) {
   let floor = 0;
-  for (const o of OBSTACLES)
+  for (const o of obstacles)
     if (
       o.h <= feet + 0.4 &&
       Math.abs(x - o.x) < o.w / 2 + 0.15 &&
@@ -128,13 +139,14 @@ export function moveBody(
   dz: number,
   feet = 0,
   radius = 0.34,
+  obstacles = OBSTACLES,
 ) {
-  if (!isBlocked(pos.x + dx, pos.z, feet, radius)) pos.x += dx;
-  if (!isBlocked(pos.x, pos.z + dz, feet, radius)) pos.z += dz;
+  if (!isBlocked(pos.x + dx, pos.z, feet, radius, obstacles)) pos.x += dx;
+  if (!isBlocked(pos.x, pos.z + dz, feet, radius, obstacles)) pos.z += dz;
   return pos;
 }
 // A reverse distance field lets all opponents navigate around the same obstacles.
-export function navigationField(x: number, z: number) {
+export function navigationField(x: number, z: number, obstacles = OBSTACLES) {
   const size = 41,
     field = new Int16Array(size * size).fill(-1),
     tx = Math.max(0, Math.min(40, Math.round(x) + 20)),
@@ -160,7 +172,7 @@ export function navigationField(x: number, z: number) {
         nx >= size ||
         nz >= size ||
         field[ni] !== -1 ||
-        isBlocked(nx - 20, nz - 20, 0, 0.38)
+        isBlocked(nx - 20, nz - 20, 0, 0.38, obstacles)
       )
         continue;
       field[ni] = field[id] + 1;
@@ -201,6 +213,7 @@ export function stepMotion(
   body: Motion,
   input: { forward: number; right: number; yaw: number; speed: number },
   dt: number,
+  obstacles = OBSTACLES,
 ) {
   const norm = Math.hypot(input.forward, input.right) || 1,
     f = input.forward / norm,
@@ -219,8 +232,8 @@ export function stepMotion(
     body.coyote = 0;
   }
   const previousFeet = body.feet;
-  moveBody(body, body.vx * dt, body.vz * dt, body.feet);
-  const floor = floorHeight(body.x, body.z, previousFeet);
+  moveBody(body, body.vx * dt, body.vz * dt, body.feet, 0.34, obstacles);
+  const floor = floorHeight(body.x, body.z, previousFeet, obstacles);
   if (body.grounded && floor < previousFeet - 0.05) body.grounded = false;
   if (!body.grounded) {
     body.feet += body.vy * dt - 0.5 * 23 * dt * dt;
@@ -283,17 +296,25 @@ export function rayBox(
   }
   return near <= range && far >= 0 ? near : null;
 }
-const WORLD_BOUNDS = OBSTACLES.map((o) => ({
-  min: { x: o.x - o.w / 2, y: 0, z: o.z - o.d / 2 },
-  max: { x: o.x + o.w / 2, y: o.h, z: o.z + o.d / 2 },
-}));
+const boundsFor = (obstacles: Obstacle[]) =>
+  obstacles.map((o) => ({
+    min: { x: o.x - o.w / 2, y: 0, z: o.z - o.d / 2 },
+    max: { x: o.x + o.w / 2, y: o.h, z: o.z + o.d / 2 },
+  }));
+const boundsCache = new WeakMap<Obstacle[], ReturnType<typeof boundsFor>>();
 export function worldHitDistance(
   origin: { x: number; y: number; z: number },
   direction: { x: number; y: number; z: number },
   range: number,
+  obstacles = OBSTACLES,
 ) {
   let nearest = range;
-  for (const box of WORLD_BOUNDS) {
+  let bounds = boundsCache.get(obstacles);
+  if (!bounds) {
+    bounds = boundsFor(obstacles);
+    boundsCache.set(obstacles, bounds);
+  }
+  for (const box of bounds) {
     const hit = rayBox(origin, direction, box.min, box.max, nearest);
     if (hit !== null) nearest = Math.min(nearest, hit);
   }

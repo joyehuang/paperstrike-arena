@@ -1,0 +1,31 @@
+PAPERSTRIKE — Audio credits
+
+Music by Vitalezzz, licensed under CC0 1.0 Universal.
+A Flawless Getaway (loop version): https://opengameart.org/content/a-flawless-getaway
+Neural Malfunction: https://opengameart.org/content/neural-malfunction
+Virtual Rush (loop version): https://opengameart.org/content/virtual-rush
+Music normalized to -19 LUFS and encoded as 128 kbps MP3 for this game.
+
+Sound effects by Kenney, licensed under CC0 1.0 Universal.
+Sci-fi Sounds: https://kenney.nl/assets/sci-fi-sounds
+Impact Sounds: https://kenney.nl/assets/impact-sounds
+Interface Sounds: https://kenney.nl/assets/interface-sounds
+
+Adapted samples:
+pistol: Sci-fi Sounds / explosionCrunch_000
+shotgun: Sci-fi Sounds / explosionCrunch_002
+sniper: Sci-fi Sounds / explosionCrunch_004
+rifle: Sci-fi Sounds / explosionCrunch_001
+cloth: Interface Sounds / scratch_002
+mag-out: Impact Sounds / impactMetal_light_001
+mag-in: Impact Sounds / impactMetal_medium_002
+bolt: Interface Sounds / switch_003
+hit: Impact Sounds / impactPunch_medium_001
+kill: Interface Sounds / confirmation_002
+hurt: Impact Sounds / impactPunch_heavy_002
+step: Impact Sounds / footstep_concrete_001
+pickup: Interface Sounds / confirmation_001
+victory: Interface Sounds / confirmation_004
+Samples trimmed, filtered and gain-adjusted; stored locally as mono Ogg Vorbis.
+
+License: https://creativecommons.org/publicdomain/zero/1.0/

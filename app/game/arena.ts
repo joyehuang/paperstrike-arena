@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { batchSketch, CombatEffects, renderPixelRatio } from './rendering';
 import { enterCombatView } from './presentation';
+import { LEVELS, type PickupSpot } from './levels';
+import { PICKUPS, collectSupply, absorbDamage, reloadPose } from './supplies';
+import { GameAudio, type Sound } from './audio';
 import {
   PHYSICS_STEP,
   createMotion,
@@ -11,18 +14,17 @@ import {
   rayBox,
   worldHitDistance,
 } from './rules';
-import {
-  WEAPONS,
-  OBSTACLES,
-  SPAWNS,
-  moveBody,
-  floorHeight,
-  navigationField,
-} from './rules';
+import { WEAPONS, moveBody, navigationField } from './rules';
 export { WEAPONS } from './rules';
 export type Snapshot = {
   phase: 'ready' | 'running' | 'paused' | 'dead' | 'ended';
   health: number;
+  armor: number;
+  level: number;
+  won: boolean;
+  reloadProgress: number;
+  reloadLabel: string;
+  pickup: { id: number; text: string; kind: PickupSpot['kind'] } | null;
   kills: number;
   deaths: number;
   time: number;
@@ -51,6 +53,7 @@ export type Snapshot = {
   lastHurt: {
     id: number;
     damage: number;
+    absorbed: number;
     angle: number;
     target: number;
   } | null;
@@ -277,9 +280,26 @@ export class Arena {
   gunCamera = new THREE.PerspectiveCamera(60, 1, 0.01, 10);
   gun = new THREE.Group();
   muzzle = new THREE.Group();
+  private magazine: THREE.Group | null = null;
+  private actionPart: THREE.Group | null = null;
+  private supportHand: THREE.Group | null = null;
+  private reloadShell: THREE.Group | null = null;
+  private level = LEVELS[0];
+  private pickups: (PickupSpot & { group: THREE.Group; remaining: number })[] =
+    [];
+  private pickupTime = 0;
+  private reloadStage = -1;
+  private stepDistance = 0;
+  private audioEngine = new GameAudio();
   state: Snapshot = {
     phase: 'ready',
     health: 100,
+    armor: 0,
+    level: 0,
+    won: false,
+    reloadProgress: 0,
+    reloadLabel: '',
+    pickup: null,
     kills: 0,
     deaths: 0,
     time: 180,
@@ -302,6 +322,7 @@ export class Arena {
   };
   muted = false;
   volume = 0.55;
+  musicVolume = 0.28;
   sensitivity = 1;
   motionAmount = 0.25;
   private host: HTMLDivElement;
@@ -350,7 +371,6 @@ export class Arena {
   private clips: number[] = WEAPONS.map((w) => w.capacity);
   private reserves: number[] = WEAPONS.map((w) => w.reserve);
 
-  private audio: AudioContext | null = null;
   private rng = 1;
   private disposed = false;
   private flashTime = 0;
@@ -396,6 +416,7 @@ export class Arena {
     this.scene.add(this.effects.root);
     this.buildGun();
     this.spawnBots();
+    this.buildPickups();
     this.resize();
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(host);
@@ -490,9 +511,11 @@ export class Arena {
     );
   }
   private buildWorld() {
+    this.scene.background = new THREE.Color(this.level.sky);
+    this.scene.fog = new THREE.Fog(this.level.sky, 32, 80);
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(110, 110),
-      new THREE.MeshLambertMaterial({ color: 0xf3e5c8 }),
+      new THREE.MeshLambertMaterial({ color: this.level.ground }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.015;
@@ -502,8 +525,11 @@ export class Arena {
     (grid.material as THREE.Material).opacity = 0.32;
     grid.position.y = 0.001;
     this.scene.add(grid);
-    for (const o of OBSTACLES) {
-      const color = obstacleColor(o);
+    for (const o of this.level.obstacles) {
+      const color =
+        o.kind === 'wall' && this.state.level > 0
+          ? this.level.accent
+          : obstacleColor(o);
       const group = this.box(o.w, o.h, o.d, color);
       group.position.set(o.x, o.h / 2, o.z);
       this.scene.add(group);
@@ -566,14 +592,30 @@ export class Arena {
         group.add(rim2);
       }
     }
-    const wallTitle = this.textPlane('SCRAP YARD', 15, 5, '#526d95', 72);
-    wallTitle.position.set(-1, 3.15, -20.48);
+    const wallTitle = this.textPlane(
+      this.level.english,
+      17,
+      4,
+      '#526d95',
+      this.state.level === 0 ? 65 : 54,
+    );
+    wallTitle.position.set(0, this.state.level === 2 ? 1.6 : 3.15, -20.48);
     this.scene.add(wallTitle);
-    const left = this.textPlane('01', 3.5, 2.4, '#376d94', 135);
-    left.position.set(-11, 2.5, -7.47);
+    const markerA = this.level.obstacles[4];
+    const markerB = this.level.obstacles[5];
+    const left = this.textPlane('A', 2.5, 2, '#376d94', 135);
+    left.position.set(
+      markerA.x,
+      markerA.h * 0.6,
+      markerA.z + markerA.d / 2 + 0.03,
+    );
     this.scene.add(left);
     const right = this.textPlane('B', 2.8, 2.8, '#328570', 145);
-    right.position.set(12, 2.8, -6.47);
+    right.position.set(
+      markerB.x,
+      markerB.h * 0.6,
+      markerB.z + markerB.d / 2 + 0.03,
+    );
     this.scene.add(right);
     const floor = this.textPlane('KEEP MOVING →', 9, 3.5, '#bd8d40', 53);
     floor.rotation.x = -Math.PI / 2;
@@ -614,6 +656,17 @@ export class Arena {
   private buildGun() {
     this.clearGroup(this.gun);
     const index = this.state.weapon;
+    this.magazine =
+      this.actionPart =
+      this.supportHand =
+      this.reloadShell =
+        null;
+    const dynamic = (part: THREE.Group) => {
+      part.userData.dynamic = true;
+      part.userData.rest = part.position.clone();
+      batchSketch(part);
+      return part;
+    };
     const add = (
       w: number,
       h: number,
@@ -631,7 +684,10 @@ export class Arena {
     if (index === 0) {
       add(0.13, 0.15, 0.43, 0, 0, -0.12, 0xd4d2c7);
       add(0.115, 0.22, 0.14, 0, -0.14, 0.02, 0xb4b19f).rotation.x = -0.2;
-      add(0.135, 0.055, 0.39, 0, 0.07, -0.13, 0xbabdb2);
+      this.actionPart = dynamic(
+        add(0.135, 0.055, 0.39, 0, 0.07, -0.13, 0xbabdb2),
+      );
+      this.magazine = dynamic(add(0.095, 0.13, 0.11, 0, -0.25, 0.02, 0x6b7b92));
       add(0.025, 0.035, 0.035, 0, 0.115, -0.3, 0x525748);
       add(0.09, 0.04, 0.05, 0, 0.11, 0.04, 0x686b5b);
     } else {
@@ -650,13 +706,29 @@ export class Arena {
         0x626957,
       );
       if (index !== 1) {
-        add(0.105, 0.29, 0.19, 0, -0.21, -0.23, 0xa8ab96).rotation.x = 0.15;
-        for (let i = 0; i < 4; i++)
-          add(0.11, 0.012, 0.155, 0, -0.12 - i * 0.05, -0.23, 0x787e69);
+        const mag = add(0.105, 0.29, 0.19, 0, -0.21, -0.23, 0x65796e);
+        mag.rotation.x = 0.15;
+        for (let i = 0; i < 4; i++) {
+          const ridge = this.box(0.11, 0.012, 0.155, 0xced7c6);
+          ridge.position.y = 0.09 - i * 0.05;
+          mag.add(ridge);
+        }
+        this.magazine = dynamic(mag);
+        this.actionPart = dynamic(
+          add(0.11, 0.045, 0.14, 0.1, 0.05, -0.13, 0x4e605c),
+        );
       } else {
-        add(0.14, 0.12, 0.34, 0, -0.03, -0.64, 0xafa990);
-        for (let i = 0; i < 6; i++)
-          add(0.145, 0.008, 0.017, 0, 0.034, -0.48 - i * 0.05, 0x646b58);
+        const pump = add(0.14, 0.12, 0.34, 0, -0.03, -0.64, 0xafa990);
+        for (let i = 0; i < 6; i++) {
+          const ridge = this.box(0.145, 0.008, 0.017, 0x646b58);
+          ridge.position.set(0, 0.064, 0.16 - i * 0.05);
+          pump.add(ridge);
+        }
+        this.actionPart = dynamic(pump);
+        this.reloadShell = dynamic(
+          add(0.07, 0.07, 0.16, -0.14, -0.12, -0.22, 0xe57556),
+        );
+        this.reloadShell.visible = false;
       }
       if (index === 2) {
         const scope = this.sketch(
@@ -683,6 +755,15 @@ export class Arena {
     sleeve.rotation.z = -0.3;
     const hand = add(0.145, 0.16, 0.17, 0.025, -0.15, 0.03, 0xe6ddc7);
     hand.rotation.x = -0.3;
+    const support = new THREE.Group();
+    const palm = this.box(0.14, 0.14, 0.16, 0xebc9a3);
+    support.add(palm);
+    const cuff = this.box(0.16, 0.15, 0.21, 0x7ea6bd);
+    cuff.position.set(-0.04, -0.035, 0.14);
+    support.add(cuff);
+    support.position.set(-0.16, -0.15, index === 0 ? 0.02 : -0.34);
+    this.gun.add(support);
+    this.supportHand = dynamic(support);
     this.muzzle = new THREE.Group();
     this.muzzle.userData.dynamic = true;
     const muzzleZ = index === 0 ? -0.38 : index === 2 ? -1.33 : -1.08;
@@ -710,7 +791,7 @@ export class Arena {
     this.gun.rotation.y = -0.07;
   }
   private spawnBots() {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < this.level.enemies; i++) {
       const group = new THREE.Group(),
         body = this.box(0.58, 0.65, 0.35, orange);
       body.position.y = 1.05;
@@ -793,7 +874,7 @@ export class Arena {
         ) as THREE.Mesh
       ).material as THREE.MeshLambertMaterial;
       this.scene.add(group);
-      const spawn = SPAWNS[i + 1];
+      const spawn = this.level.spawns[i + 1];
       group.position.set(spawn.x, 0, spawn.z);
       this.bots.push({
         group,
@@ -924,7 +1005,7 @@ export class Arena {
           this.held = true;
           this.fire();
         }
-        if (e.button === 2) {
+        if (e.button === 2 && !this.state.reloading) {
           this.state.aiming = true;
           this.emit();
         }
@@ -981,12 +1062,7 @@ export class Arena {
       this.state.phase === 'dead'
     )
       return;
-    try {
-      if (!this.audio) this.audio = new AudioContext();
-      void this.audio.resume().catch(() => {});
-    } catch {
-      /* Audio availability must not block input. */
-    }
+    this.audioEngine.unlock(this.level.music);
     this.renderer.domElement.focus({ preventScroll: true });
     enterCombatView(
       this.renderer.domElement,
@@ -1009,9 +1085,15 @@ export class Arena {
     this.state = {
       phase: 'running',
       health: 100,
+      armor: 0,
+      level: LEVELS.indexOf(this.level),
+      won: false,
+      reloadProgress: 0,
+      reloadLabel: '',
+      pickup: null,
       kills: 0,
       deaths: 0,
-      time: 180,
+      time: this.level.duration,
       weapon: selected,
       ammo: WEAPONS[selected].capacity,
       reserve: WEAPONS[selected].reserve,
@@ -1032,7 +1114,11 @@ export class Arena {
     this.pausedPhase = 'running';
     this.clips = WEAPONS.map((w) => w.capacity);
     this.reserves = WEAPONS.map((w) => w.reserve);
-    this.camera.position.set(0, 1.72, 16);
+    this.camera.position.set(
+      this.level.spawns[0].x,
+      1.72,
+      this.level.spawns[0].z,
+    );
     this.yaw = 0;
     this.pitch = -0.035;
     this.motion = createMotion(this.camera.position.x, this.camera.position.z);
@@ -1048,12 +1134,20 @@ export class Arena {
     this.hitTime = 0;
     this.hurtTime = 0;
     this.pathTime = 0;
+    this.pickupTime = 0;
+    this.reloadStage = -1;
+    this.stepDistance = 0;
+    this.effects.update(5);
+    this.pickups.forEach((p) => {
+      p.remaining = 0;
+      p.group.visible = true;
+    });
     this.clearInput();
     this.bots.forEach((bot, i) => {
       bot.alive = true;
       bot.health = 100;
       bot.group.visible = true;
-      const p = SPAWNS[i + 1];
+      const p = this.level.spawns[i + 1];
       bot.group.position.set(p.x, 0, p.z);
       bot.cooldown = 1.5 + i * 0.6;
       bot.repath = 0;
@@ -1062,6 +1156,146 @@ export class Arena {
       bot.surface.emissive.setHex(0x000000);
     });
     this.emit();
+  }
+  selectLevel(index: number) {
+    if (
+      !Number.isInteger(index) ||
+      !LEVELS[index] ||
+      this.state.phase === 'running' ||
+      this.state.phase === 'dead'
+    )
+      return false;
+    this.level = LEVELS[index];
+    this.state.level = index;
+    for (let i = this.scene.children.length - 1; i >= 0; i--) {
+      const child = this.scene.children[i];
+      if (child instanceof THREE.Light || child === this.effects.root) continue;
+      this.disposeObject(child);
+      this.scene.remove(child);
+    }
+    this.scene.remove(this.effects.root);
+    this.decalTextures.forEach((t) => t.dispose());
+    this.decalTextures = [];
+    this.bots = [];
+    this.pickups = [];
+    this.buildWorld();
+    batchSketch(this.scene);
+    this.scene.add(this.effects.root);
+    this.spawnBots();
+    this.buildPickups();
+    this.reset();
+    this.state.phase = 'ready';
+    this.audioEngine.stopMusic();
+    this.drawMap();
+    this.emit();
+    return true;
+  }
+  private finish(won: boolean) {
+    if (this.state.phase === 'ended') return;
+    this.state.phase = 'ended';
+    this.state.won = won;
+    this.state.reloading = false;
+    this.reloadTime = 0;
+    this.pausedPhase = 'running';
+    this.clearInput();
+    this.sound(won ? 'victory' : 'hurt');
+    if (document.pointerLockElement === this.renderer.domElement)
+      document.exitPointerLock();
+    this.emit();
+  }
+  private buildPickups() {
+    this.pickups = this.level.pickups.map((p) => {
+      const group = new THREE.Group();
+      const color = PICKUPS[p.kind].color;
+      const base = this.box(0.65, 0.4, 0.38, color);
+      group.add(base);
+      if (p.kind === 'health') {
+        const horizontal = this.box(0.38, 0.11, 0.42, 0xfffcec);
+        const vertical = this.box(0.11, 0.3, 0.43, 0xfffcec);
+        group.add(horizontal, vertical);
+      } else if (p.kind === 'ammo') {
+        for (let i = 0; i < 3; i++) {
+          const bullet = this.sketch(
+            new THREE.CylinderGeometry(0.04, 0.045, 0.29, 6),
+            0xfff2b2,
+            0,
+          );
+          bullet.position.set((i - 1) * 0.15, 0.05, 0.23);
+          group.add(bullet);
+        }
+      } else {
+        const badge = this.sketch(
+          new THREE.CircleGeometry(0.2, 5),
+          0xeaf4ff,
+          0,
+        );
+        badge.position.z = 0.22;
+        badge.rotation.z = Math.PI * 0.3;
+        group.add(badge);
+      }
+      const handle = this.box(0.26, 0.07, 0.1, 0x516575);
+      handle.position.y = 0.25;
+      group.add(handle);
+      batchSketch(group);
+      group.position.set(p.x, 0.65, p.z);
+      this.scene.add(group);
+      return { ...p, group, remaining: 0 };
+    });
+  }
+  private updatePickups(dt: number) {
+    this.pickupTime = Math.max(0, this.pickupTime - dt);
+    if (this.pickupTime === 0) this.state.pickup = null;
+    for (const p of this.pickups) {
+      p.remaining = Math.max(0, p.remaining - dt);
+      p.group.visible = p.remaining === 0;
+      if (!p.group.visible) continue;
+      p.group.position.y = 0.65 + Math.sin(this.elapsed * 2 + p.x) * 0.09;
+      p.group.rotation.y += dt * 0.65;
+      if (
+        this.state.phase !== 'running' ||
+        this.motion.feet > 0.7 ||
+        Math.hypot(this.motion.x - p.x, this.motion.z - p.z) > 1.15
+      )
+        continue;
+      const from = new THREE.Vector3(this.motion.x, 0.5, this.motion.z);
+      const direction = new THREE.Vector3(p.x - from.x, 0, p.z - from.z);
+      const distance = direction.length();
+      if (
+        distance > 0.01 &&
+        worldHitDistance(
+          from,
+          direction.normalize(),
+          distance,
+          this.level.obstacles,
+        ) <
+          distance - 0.05
+      )
+        continue;
+      const result = collectSupply(
+        p.kind,
+        this.state.health,
+        this.state.armor,
+        this.reserves,
+      );
+      if (!result.amount) continue;
+      this.state.health = result.health;
+      this.state.armor = result.armor;
+      this.reserves = result.reserves;
+      this.state.reserve = this.reserves[this.state.weapon];
+      p.remaining = PICKUPS[p.kind].respawn;
+      p.group.visible = false;
+      const text =
+        p.kind === 'health'
+          ? '+' + result.amount + ' 生命值'
+          : p.kind === 'shield'
+            ? '+' + result.amount + ' 护甲'
+            : '弹药补给 +' + result.amount;
+      this.state.pickup = { id: ++this.hitSerial, text, kind: p.kind };
+      this.pickupTime = 2.1;
+      this.burst(p.group.position, PICKUPS[p.kind].color, 12);
+      this.sound('pickup');
+      this.emit();
+    }
   }
   private clearInput() {
     this.keys.clear();
@@ -1079,6 +1313,8 @@ export class Arena {
     this.state.ammo = this.clips[index];
     this.state.reserve = this.reserves[index];
     this.state.reloading = false;
+    this.state.reloadProgress = 0;
+    this.state.reloadLabel = '';
     this.state.aiming = false;
     this.reloadTime = 0;
     this.cooldown = 0.22;
@@ -1098,6 +1334,9 @@ export class Arena {
     this.state.reloading = true;
     this.state.aiming = false;
     this.reloadTime = WEAPONS[this.state.weapon].reload;
+    this.reloadStage = 0;
+    this.state.reloadProgress = 0;
+    this.state.reloadLabel = reloadPose(this.state.weapon, 0).label;
     this.sound('reload');
     this.emit();
     return true;
@@ -1217,6 +1456,7 @@ export class Arena {
       this.state.hits++;
       this.sound('hit');
     }
+    if (this.state.kills >= this.level.goal) this.finish(true);
     this.emit();
   }
   private castShot(
@@ -1224,7 +1464,12 @@ export class Arena {
     direction: THREE.Vector3,
     range: number,
   ) {
-    let nearest = worldHitDistance(origin, direction, range),
+    let nearest = worldHitDistance(
+        origin,
+        direction,
+        range,
+        this.level.obstacles,
+      ),
       target: number | null = null,
       headshot = false;
     for (const bot of this.bots) {
@@ -1268,71 +1513,8 @@ export class Arena {
       { id: Date.now() + this.rng++, text },
     ];
   }
-  private sound(
-    type: 'shot' | 'reload' | 'hit' | 'kill' | 'hurt' | 'jump' | 'step',
-  ) {
-    if (!this.audio || this.muted || this.volume <= 0) return;
-    const ac = this.audio,
-      t = ac.currentTime,
-      gain = ac.createGain();
-    gain.connect(ac.destination);
-    let duration = 0.12;
-    let loud =
-      type === 'hit'
-        ? 0.14
-        : type === 'kill'
-          ? 0.19
-          : type === 'hurt'
-            ? 0.14
-            : 0.035;
-    if (type === 'shot') {
-      duration =
-        this.state.weapon === 1 ? 0.22 : this.state.weapon === 2 ? 0.3 : 0.13;
-      loud = 0.2;
-      const buffer = ac.createBuffer(
-          1,
-          Math.floor(ac.sampleRate * duration),
-          ac.sampleRate,
-        ),
-        data = buffer.getChannelData(0);
-      for (let i = 0; i < data.length; i++)
-        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 3);
-      const noise = ac.createBufferSource();
-      noise.buffer = buffer;
-      const filter = ac.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value =
-        this.state.weapon === 2 ? 1400 : this.state.weapon === 1 ? 950 : 2400;
-      noise.connect(filter);
-      filter.connect(gain);
-      noise.start(t);
-      noise.stop(t + duration);
-    } else {
-      const osc = ac.createOscillator();
-      osc.type = type === 'reload' ? 'triangle' : 'sine';
-      const frequency =
-        type === 'hit'
-          ? 1000
-          : type === 'kill'
-            ? 660
-            : type === 'hurt'
-              ? 110
-              : type === 'jump'
-                ? 180
-                : type === 'step'
-                  ? 70
-                  : 400;
-      osc.frequency.setValueAtTime(frequency, t);
-      osc.frequency.exponentialRampToValueAtTime(
-        type === 'kill' ? 1320 : frequency * 0.45,
-        t + duration,
-      );
-      osc.connect(gain);
-      osc.start(t);
-      osc.stop(t + duration);
-    }
-    gain.gain.setValueAtTime(loud * this.volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  private sound(type: Sound) {
+    this.audioEngine?.play(type, this.state.weapon);
   }
   private updateBots(dt: number) {
     this.pathTime -= dt;
@@ -1340,6 +1522,7 @@ export class Arena {
       this.field = navigationField(
         this.camera.position.x,
         this.camera.position.z,
+        this.level.obstacles,
       );
       this.pathTime = 0.55;
     }
@@ -1347,7 +1530,7 @@ export class Arena {
       if (!bot.alive) {
         bot.respawn -= dt;
         if (bot.respawn <= 0) {
-          const candidates = SPAWNS.filter(
+          const candidates = this.level.spawns.filter(
             (p) =>
               Math.hypot(
                 p.x - this.camera.position.x,
@@ -1356,7 +1539,7 @@ export class Arena {
           );
           const spawn =
             candidates[Math.floor(Math.random() * candidates.length)] ||
-            SPAWNS[3];
+            this.level.spawns[3];
           bot.group.position.set(spawn.x, 0, spawn.z);
           bot.health = 100;
           bot.alive = true;
@@ -1379,7 +1562,9 @@ export class Arena {
       const direction = destination.clone().sub(origin),
         len = direction.length();
       direction.normalize();
-      const blocked = worldHitDistance(origin, direction, len) < len - 0.1;
+      const blocked =
+        worldHitDistance(origin, direction, len, this.level.obstacles) <
+        len - 0.1;
       if (blocked || distance > 9) {
         bot.repath -= dt;
         if (bot.repath <= 0 || pos.distanceTo(bot.target) < 0.35) {
@@ -1418,10 +1603,11 @@ export class Arena {
         if (ml > 0.08 || !blocked)
           moveBody(
             pos,
-            (mx / norm) * dt * 2.1,
-            (mz / norm) * dt * 2.1,
+            (mx / norm) * dt * (2.1 + this.state.level * 0.15),
+            (mz / norm) * dt * (2.1 + this.state.level * 0.15),
             0,
             0.35,
+            this.level.obstacles,
           );
       } else if (distance < 5) {
         moveBody(
@@ -1430,6 +1616,7 @@ export class Arena {
           (-dz / (distance || 1)) * dt * 1.1,
           0,
           0.35,
+          this.level.obstacles,
         );
       } else {
         const strafe = Math.sin(this.elapsed * 0.7 + bot.id * 2);
@@ -1439,6 +1626,7 @@ export class Arena {
           (-dx / (distance || 1)) * dt * strafe,
           0,
           0.35,
+          this.level.obstacles,
         );
       }
       bot.legs[0].rotation.x = Math.sin(this.elapsed * 7 + bot.id) * 0.2;
@@ -1449,7 +1637,7 @@ export class Arena {
         bot.cooldown <= 0 &&
         this.state.phase === 'running'
       ) {
-        bot.cooldown = 1.15 + Math.random() * 0.8;
+        bot.cooldown = 1.35 - this.state.level * 0.1 + Math.random() * 0.8;
         const muzzle = pos
           .clone()
           .add(
@@ -1465,10 +1653,17 @@ export class Arena {
           Math.random() < 0.55 - Math.min(distance, 25) * 0.01
         ) {
           const damage = 7 + Math.floor(Math.random() * 5);
-          this.state.health = Math.max(0, this.state.health - damage);
+          const received = absorbDamage(
+            this.state.health,
+            this.state.armor,
+            damage,
+          );
+          this.state.health = received.health;
+          this.state.armor = received.armor;
           this.state.lastHurt = {
             id: ++this.hitSerial,
-            damage,
+            damage: damage - received.absorbed,
+            absorbed: received.absorbed,
             angle: this.yaw - Math.atan2(dx, dz),
             target: bot.id + 1,
           };
@@ -1492,9 +1687,9 @@ export class Arena {
     }
   }
   private respawnPlayer() {
-    let best = SPAWNS[0],
+    let best = this.level.spawns[0],
       bestDistance = -1;
-    for (const spawn of SPAWNS) {
+    for (const spawn of this.level.spawns) {
       const nearest = Math.min(
         ...this.bots
           .filter((b) => b.alive)
@@ -1521,6 +1716,10 @@ export class Arena {
     this.yaw = Math.atan2(-best.x, -best.z) + Math.PI;
     this.pitch = 0;
     this.state.health = 100;
+    this.state.armor = 0;
+    this.state.pickup = null;
+    this.state.reloadProgress = 0;
+    this.state.reloadLabel = '';
     this.state.lastHit = null;
     this.state.lastHurt = null;
     this.hurtTime = 0;
@@ -1561,11 +1760,33 @@ export class Arena {
     this.previousMotion.z = this.motion.z;
     this.previousMotion.feet = this.motion.feet;
     const grounded = this.motion.grounded;
-    stepMotion(this.motion, { forward, right, yaw: this.yaw, speed }, dt);
+    stepMotion(
+      this.motion,
+      { forward, right, yaw: this.yaw, speed },
+      dt,
+      this.level.obstacles,
+    );
     if (grounded && !this.motion.grounded && this.motion.vy > 0)
       this.sound('jump');
+    if (this.motion.grounded) {
+      this.stepDistance += Math.hypot(this.motion.vx, this.motion.vz) * dt;
+      if (this.stepDistance > (this.state.crouching ? 2.8 : 2.1)) {
+        this.stepDistance = 0;
+        this.sound('step');
+      }
+    }
     if (this.state.reloading) {
-      this.reloadTime -= dt;
+      this.reloadTime = Math.max(0, this.reloadTime - dt);
+      const progress = 1 - this.reloadTime / WEAPONS[this.state.weapon].reload;
+      const pose = reloadPose(this.state.weapon, progress);
+      this.state.reloadProgress = Math.round(progress * 20) * 5;
+      this.state.reloadLabel = pose.label;
+      if (pose.stage !== this.reloadStage) {
+        this.reloadStage = pose.stage;
+        this.sound(
+          pose.stage === 1 ? 'magOut' : pose.stage === 2 ? 'magIn' : 'bolt',
+        );
+      }
       if (this.reloadTime <= 0) {
         const amount = Math.min(
           WEAPONS[this.state.weapon].capacity - this.state.ammo,
@@ -1576,9 +1797,92 @@ export class Arena {
         this.clips[this.state.weapon] = this.state.ammo;
         this.reserves[this.state.weapon] = this.state.reserve;
         this.state.reloading = false;
+        this.state.reloadProgress = 100;
+        this.state.reloadLabel = '';
         this.emit();
       }
     }
+  }
+  private updateGun(dt: number, active: boolean) {
+    this.gun.visible =
+      this.state.phase !== 'dead' &&
+      !(this.state.aiming && this.state.weapon === 2);
+    const aim = this.state.aiming;
+    const pose = reloadPose(
+      this.state.weapon,
+      this.state.reloading
+        ? 1 - this.reloadTime / WEAPONS[this.state.weapon].reload
+        : 1,
+    );
+    const reload = pose.lift;
+    if (this.magazine) {
+      this.magazine.position.copy(this.magazine.userData.rest);
+      this.magazine.position.y -= pose.remove * 0.28;
+      this.magazine.position.x -= pose.remove * 0.17;
+      this.magazine.rotation.z = -pose.remove * 0.25;
+    }
+    if (this.actionPart) {
+      this.actionPart.position.copy(this.actionPart.userData.rest);
+      this.actionPart.position.z +=
+        pose.rack * (this.state.weapon === 1 ? 0.18 : 0.1);
+    }
+    if (this.supportHand) {
+      this.supportHand.position.copy(this.supportHand.userData.rest);
+      this.supportHand.position.x -= pose.remove * 0.13;
+      this.supportHand.position.y -= pose.remove * 0.24;
+      this.supportHand.position.z += reload * 0.08 + pose.rack * 0.12;
+    }
+    if (this.reloadShell) {
+      this.reloadShell.visible = this.state.reloading && pose.shell > 0;
+      this.reloadShell.position.copy(this.reloadShell.userData.rest);
+      this.reloadShell.position.x -= (1 - pose.shell) * 0.18;
+      this.reloadShell.position.y -= (1 - pose.shell) * 0.15;
+    }
+    this.swayX = damp(this.swayX, 0, 14, dt);
+    this.swayY = damp(this.swayY, 0, 14, dt);
+    const gunBob =
+      Math.sin(this.bob) * 0.006 * this.bobAmplitude * (aim ? 0.15 : 1);
+    this.gun.position.x = damp(
+      this.gun.position.x,
+      (aim ? 0 : 0.37) - reload * 0.14 - this.swayX + gunBob,
+      18,
+      dt,
+    );
+    this.gun.position.y = damp(
+      this.gun.position.y,
+      (aim ? -0.135 : -0.28) -
+        this.sprintBlend * 0.035 +
+        reload * (this.state.weapon === 0 ? 0.34 : 0.22) +
+        gunBob * 0.7 +
+        this.swayY,
+      18,
+      dt,
+    );
+    this.gun.position.z = damp(
+      this.gun.position.z,
+      -0.52 + this.recoil - reload * 0.18,
+      22,
+      dt,
+    );
+    this.gun.rotation.x = damp(
+      this.gun.rotation.x,
+      this.recoil - this.sprintBlend * 0.1 + reload * 0.2,
+      16,
+      dt,
+    );
+    this.gun.rotation.y = damp(
+      this.gun.rotation.y,
+      (aim ? 0 : -0.06) + reload * 0.4,
+      16,
+      dt,
+    );
+    this.gun.rotation.z = damp(
+      this.gun.rotation.z,
+      -reload * 0.75 - this.sprintBlend * 0.045,
+      14,
+      dt,
+    );
+    this.muzzle.visible = this.flashTime > 0 && active;
   }
   private tick = (timestamp: number) => {
     if (this.disposed) return;
@@ -1605,11 +1909,7 @@ export class Arena {
         if (this.state.respawn <= 0) this.respawnPlayer();
       }
       if (this.state.time <= 0) {
-        this.state.phase = 'ended';
-        this.pausedPhase = 'running';
-        this.clearInput();
-        document.exitPointerLock();
-        this.emit();
+        this.finish(false);
       }
     }
     const alpha = this.accumulator / PHYSICS_STEP;
@@ -1661,6 +1961,7 @@ export class Arena {
       this.camera.updateProjectionMatrix();
     }
     if (active) {
+      this.updatePickups(dt);
       this.updateBots(dt);
       if (this.held && this.state.weapon === 3) this.fire();
       this.effects.update(dt);
@@ -1670,56 +1971,7 @@ export class Arena {
       bot.surface.emissive.setHex(bot.flash > 0 ? 0xff4736 : 0x000000);
       bot.surface.emissiveIntensity = bot.flash > 0 ? 0.65 : 0;
     }
-    this.gun.visible =
-      this.state.phase !== 'dead' &&
-      !(this.state.aiming && this.state.weapon === 2);
-    const aim = this.state.aiming,
-      reload = this.state.reloading
-        ? Math.sin(
-            Math.min(1, this.reloadTime / WEAPONS[this.state.weapon].reload) *
-              Math.PI,
-          )
-        : 0;
-    this.swayX = damp(this.swayX, 0, 14, dt);
-    this.swayY = damp(this.swayY, 0, 14, dt);
-    const gunBob =
-      Math.sin(this.bob) * 0.006 * this.bobAmplitude * (aim ? 0.15 : 1);
-    this.gun.position.x = damp(
-      this.gun.position.x,
-      (aim ? 0 : 0.37) - this.swayX + gunBob,
-      18,
-      dt,
-    );
-    this.gun.position.y = damp(
-      this.gun.position.y,
-      (aim ? -0.135 : -0.28) -
-        this.sprintBlend * 0.035 -
-        reload * 0.27 +
-        gunBob * 0.7 +
-        this.swayY,
-      18,
-      dt,
-    );
-    this.gun.position.z = damp(
-      this.gun.position.z,
-      -0.52 + this.recoil,
-      22,
-      dt,
-    );
-    this.gun.rotation.x = damp(
-      this.gun.rotation.x,
-      this.recoil - this.sprintBlend * 0.1,
-      16,
-      dt,
-    );
-    this.gun.rotation.y = damp(this.gun.rotation.y, aim ? 0 : -0.06, 16, dt);
-    this.gun.rotation.z = damp(
-      this.gun.rotation.z,
-      -reload * 0.3 - this.sprintBlend * 0.045,
-      14,
-      dt,
-    );
-    this.muzzle.visible = this.flashTime > 0 && active;
+    this.updateGun(dt, active);
     this.renderer.info.reset();
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
@@ -1749,6 +2001,12 @@ export class Arena {
         this.qualityCooldown = this.frameAverage > 0.023 ? 3 : 8;
       }
     }
+    this.audioEngine.update(
+      this.state.phase === 'running' || this.state.phase === 'dead',
+      this.volume,
+      this.musicVolume,
+      this.muted,
+    );
     this.publish += dt;
     if (this.publish > 0.1) {
       this.publish = 0;
@@ -1779,7 +2037,7 @@ export class Arena {
       ctx.lineTo(w, i * sz);
       ctx.stroke();
     }
-    for (const o of OBSTACLES) {
+    for (const o of this.level.obstacles) {
       ctx.fillStyle = '#' + obstacleColor(o).toString(16).padStart(6, '0');
       ctx.strokeStyle = '#88816d';
       ctx.lineWidth = 1.6;
@@ -1788,6 +2046,26 @@ export class Arena {
       ctx.fillRect(x, z, o.w * sx, o.d * sz);
       ctx.strokeRect(x, z, o.w * sx, o.d * sz);
     }
+    for (const p of this.pickups) {
+      const x = (p.x + 22.5) * sx,
+        y = (p.z + 22.5) * sz;
+      ctx.globalAlpha = p.remaining > 0 ? 0.25 : 1;
+      ctx.fillStyle = PICKUPS[p.kind].css;
+      ctx.strokeStyle = '#fffdf1';
+      ctx.lineWidth = 2;
+      ctx.fillRect(x - 6, y - 6, 12, 12);
+      ctx.strokeRect(x - 6, y - 6, 12, 12);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        p.kind === 'health' ? '+' : p.kind === 'ammo' ? '•' : '◇',
+        x,
+        y,
+      );
+    }
+    ctx.globalAlpha = 1;
     for (const b of this.bots) {
       if (!b.alive) continue;
       ctx.fillStyle = '#d78160';
@@ -1895,7 +2173,8 @@ export class Arena {
     });
   }
   private clearGroup(group: THREE.Group) {
-    for (const child of [...group.children]) {
+    for (let i = group.children.length - 1; i >= 0; i--) {
+      const child = group.children[i];
       this.disposeObject(child);
       group.remove(child);
     }
@@ -1912,6 +2191,6 @@ export class Arena {
     this.decalTextures.forEach((texture) => texture.dispose());
     this.renderer.dispose();
     this.renderer.domElement.remove();
-    void this.audio?.close();
+    this.audioEngine.dispose();
   }
 }
