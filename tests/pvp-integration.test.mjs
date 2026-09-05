@@ -50,6 +50,7 @@ test(
       const snapshots = new Map();
       const remember = (r) => {
         rooms.push(r);
+        r.reconnection.enabled = false;
         r.onMessage('snapshot', (s) => snapshots.set(r.roomId, s));
         return r;
       };
@@ -60,6 +61,7 @@ test(
         await desktop.joinOrCreate('battle', { device: 'desktop', name: 'B' }),
       );
       assert.equal(a.roomId, b.roomId);
+      assert.match(a.roomId, /^[1-9]\d{5}$/);
       const m = remember(
         await mobile.joinOrCreate('battle', { device: 'mobile', name: 'M' }),
       );
@@ -108,6 +110,7 @@ test(
         (s) => s.players.find((p) => p.id === a.sessionId).motion.vz < 0,
       );
       a.reconnection.minUptime = 0;
+      a.reconnection.enabled = true;
       const reconnected = new Promise((resolve, reject) => {
         const timer = setTimeout(
           () => reject(new Error('reconnect timeout')),
@@ -124,6 +127,7 @@ test(
         a,
         (s) => s.players.find((p) => p.id === a.sessionId)?.connected === true,
       );
+      a.reconnection.enabled = false;
       const privateRoom = remember(
         await desktop.create('battle', {
           device: 'desktop',
@@ -138,6 +142,25 @@ test(
         }),
       );
       assert.notEqual(privateRoom.roomId, quick.roomId);
+      const friend = remember(
+        await desktop.joinById(privateRoom.roomId, {
+          device: 'desktop',
+          name: 'Friend using six digits',
+        }),
+      );
+      assert.equal(friend.roomId, privateRoom.roomId);
+      const parallelRooms = await Promise.all(
+        Array.from({ length: 12 }, () =>
+          desktop
+            .create('battle', { device: 'desktop', private: true })
+            .then(remember),
+        ),
+      );
+      const codes = [a, m, privateRoom, quick, ...parallelRooms].map(
+        (r) => r.roomId,
+      );
+      codes.forEach((code) => assert.match(code, /^[1-9]\d{5}$/));
+      assert.equal(new Set(codes).size, codes.length);
     } finally {
       await Promise.allSettled(rooms.map((r) => r.leave()));
       child.kill();

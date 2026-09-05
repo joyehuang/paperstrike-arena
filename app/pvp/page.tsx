@@ -506,13 +506,17 @@ export default function PvpPage() {
             加入朋友的房间码
             <input
               value={code}
-              maxLength={32}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="仅加入房间时填写，无需自己设置"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={6}
+              onChange={(e) =>
+                setCode(e.target.value.normalize('NFKC').replace(/\D/g, ''))
+              }
+              placeholder="输入朋友的 6 位数字房间码"
             />
           </label>
           <button
-            disabled={!endpoint || busy || !code.trim()}
+            disabled={!endpoint || busy || !/^\d{6}$/.test(code)}
             onClick={() => void join('code')}
           >
             加入房间

@@ -6,9 +6,12 @@ import {
 } from '@colyseus/core';
 import { Battle } from './battle';
 import { devicePool, validMode } from '../app/game/pvp-protocol';
+import { randomInt } from 'node:crypto';
 
 export class BattleRoom extends Room {
   static active = 0;
+  // Allocation is synchronous: one room process owns all active codes.
+  private static codes = new Set<string>();
   private registered = false;
   maxClients = 4;
   battle!: Battle;
@@ -20,6 +23,12 @@ export class BattleRoom extends Room {
       throw new ServerError(503, '房间暂满，请稍后重试');
     if (options.mode !== undefined && !validMode(options.mode))
       throw new ServerError(400, '无效的玩法');
+    let code: string;
+    do {
+      code = String(randomInt(100000, 1000000));
+    } while (BattleRoom.codes.has(code));
+    this.roomId = code;
+    BattleRoom.codes.add(code);
     BattleRoom.active++;
     this.registered = true;
     this.battle = new Battle(
@@ -111,6 +120,9 @@ export class BattleRoom extends Room {
     this.rates.delete(client.sessionId);
   }
   onDispose() {
-    if (this.registered) BattleRoom.active--;
+    if (this.registered) {
+      BattleRoom.active--;
+      BattleRoom.codes.delete(this.roomId);
+    }
   }
 }
