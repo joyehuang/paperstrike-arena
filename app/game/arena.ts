@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { batchSketch, CombatEffects, renderPixelRatio } from './rendering';
 import { enterCombatView } from './presentation';
+import type { PvpLink, PvpSnapshot } from './pvp-protocol';
 import { enemySpawn, damageBearing } from './combat-feedback';
 import { LEVELS, type PickupSpot } from './levels';
 import { PICKUPS, collectSupply, absorbDamage, reloadPose } from './supplies';
@@ -332,6 +333,9 @@ export class Arena {
   motionAmount = 0.25;
   touchMode = false;
   trainingUnlimited = true;
+  pvp: PvpLink | null = null;
+  private pvpInputTime = 0;
+  private pvpEvent = 0;
   private touchForward = 0;
   private touchRight = 0;
   private host: HTMLDivElement;
@@ -925,7 +929,10 @@ export class Arena {
       () => {
         if (this.touchMode) return;
         if (document.pointerLockElement === this.renderer.domElement) {
-          if (this.state.phase === 'ready' || this.state.phase === 'ended')
+          if (
+            !this.pvp &&
+            (this.state.phase === 'ready' || this.state.phase === 'ended')
+          )
             this.reset();
           this.state.phase = this.pausedPhase;
           this.last = performance.now();
@@ -1009,6 +1016,7 @@ export class Arena {
           this.selectWeapon(Number(e.code.slice(-1)) - 1);
         if (e.code === 'Space' && this.state.phase === 'running') {
           this.motion.jumpBuffer = 0.13;
+          this.pvp?.send('jump', null);
         }
       },
       options,
@@ -1099,7 +1107,10 @@ export class Arena {
     this.audioEngine.unlock(this.level.music);
     this.renderer.domElement.focus({ preventScroll: true });
     if (this.touchMode) {
-      if (this.state.phase === 'ready' || this.state.phase === 'ended')
+      if (
+        !this.pvp &&
+        (this.state.phase === 'ready' || this.state.phase === 'ended')
+      )
         this.reset();
       this.state.phase = this.pausedPhase;
       this.last = performance.now();
@@ -1115,6 +1126,148 @@ export class Arena {
       document.documentElement,
       this.error,
     );
+  }
+  applyPvp(snapshot: PvpSnapshot) {
+    if (!this.pvp) return;
+    const own = snapshot.players.find((p) => p.id === this.pvp!.id);
+    if (!own) return;
+    const respawn = this.state.health <= 0 && own.health > 0;
+    const error = Math.hypot(
+      this.motion.x - own.motion.x,
+      this.motion.z - own.motion.z,
+    );
+    if (respawn || error > 2) {
+      Object.assign(this.motion, own.motion);
+      Object.assign(this.previousMotion, {
+        x: own.motion.x,
+        z: own.motion.z,
+        feet: own.motion.feet,
+      });
+    } else {
+      this.motion.x += (own.motion.x - this.motion.x) * 0.15;
+      this.motion.z += (own.motion.z - this.motion.z) * 0.15;
+    }
+    if (this.state.weapon !== own.weapon) {
+      this.state.weapon = own.weapon;
+      this.buildGun();
+    }
+    Object.assign(this.state, {
+      health: own.health,
+      armor: own.armor,
+      ammo: own.ammo,
+      reserve: own.reserve,
+      kills: own.kills,
+      deaths: own.deaths,
+      time: snapshot.remaining,
+      respawn: own.respawn,
+      reloading: own.reload > 0,
+    });
+    this.clips[own.weapon] = own.ammo;
+    this.reserves[own.weapon] = own.reserve;
+    this.reloadTime = own.reload;
+    if (own.reload > 0) {
+      this.state.aiming = false;
+      const progress = 1 - own.reload / WEAPONS[own.weapon].reload;
+      this.state.reloadProgress = Math.round(progress * 100);
+      this.state.reloadLabel = reloadPose(own.weapon, progress).label;
+    } else {
+      this.state.reloadProgress = 0;
+      this.state.reloadLabel = '';
+    }
+    if (own.health <= 0 && this.state.phase === 'running') {
+      this.state.phase = 'dead';
+      this.clearInput();
+    }
+    if (respawn && this.state.phase === 'dead') this.state.phase = 'running';
+    const others = snapshot.players.filter((p) => p.id !== own.id);
+    this.bots.forEach((b, i) => {
+      const p = others[i];
+      b.alive = !!p && p.health > 0;
+      b.group.visible = b.alive;
+      if (!p) return;
+      b.health = p.health;
+      b.healthBar.scale.x = (0.79 * p.health) / 100;
+      b.target.set(p.motion.x, p.motion.feet, p.motion.z);
+      b.group.rotation.y = p.yaw + Math.PI;
+      b.group.scale.y = p.crouch ? 0.65 : 1;
+    });
+    this.pickups.forEach((p, i) => {
+      p.remaining = snapshot.pickups[i] || 0;
+      p.group.visible = p.remaining <= 0;
+    });
+    for (const event of snapshot.events) {
+      if (event.id <= this.pvpEvent) continue;
+      this.pvpEvent = event.id;
+      if (event.kind === 'shot' && event.actor !== own.id) {
+        const shooter = others.find((p) => p.id === event.actor);
+        if (shooter) {
+          const from = new THREE.Vector3(
+            shooter.motion.x,
+            shooter.motion.feet + 1.4,
+            shooter.motion.z,
+          );
+          const to = from
+            .clone()
+            .add(
+              new THREE.Vector3(
+                -Math.sin(shooter.yaw),
+                Math.sin(shooter.pitch),
+                -Math.cos(shooter.yaw),
+              ).multiplyScalar(20),
+            );
+          this.tracer(from, to, 0xcd815f);
+          this.audioEngine?.play('shot', shooter.weapon);
+        }
+      }
+      if (event.kind === 'hit' && event.target === own.id) {
+        this.state.lastHurt = {
+          id: ++this.hitSerial,
+          damage: event.damage || 0,
+          absorbed: 0,
+          sourceX: event.sourceX || 0,
+          sourceZ: event.sourceZ || 0,
+          angle: damageBearing(
+            this.camera.position,
+            { x: event.sourceX || 0, z: event.sourceZ || 0 },
+            this.yaw,
+          ),
+          target: 1,
+        };
+        this.hurtTime = 1.25;
+        this.sound('hurt');
+      }
+      if (event.kind === 'hit' && event.actor === own.id) {
+        this.hitTime = 0.32;
+        this.state.lastHit = {
+          id: ++this.hitSerial,
+          damage: event.damage || 0,
+          health: event.health || 0,
+          target: 1,
+          headshot: !!event.headshot,
+          killed: event.health === 0,
+        };
+        this.sound(event.health === 0 ? 'kill' : 'hit');
+      }
+    }
+    this.emit();
+  }
+  private sendPvpInput() {
+    this.pvp?.send('input', {
+      forward:
+        Number(this.keys.has('KeyW')) -
+        Number(this.keys.has('KeyS')) +
+        (this.touchForward || 0),
+      right:
+        Number(this.keys.has('KeyD')) -
+        Number(this.keys.has('KeyA')) +
+        (this.touchRight || 0),
+      yaw: this.yaw,
+      pitch: this.pitch,
+      aim: this.state.aiming,
+      crouch: this.state.crouching,
+      sprint: this.state.sprinting,
+      jump: false,
+    });
   }
   pause() {
     if (this.state.phase === 'running' || this.state.phase === 'dead') {
@@ -1290,6 +1443,7 @@ export class Arena {
     });
   }
   private updatePickups(dt: number) {
+    if (this.pvp) return;
     this.pickupTime = Math.max(0, this.pickupTime - dt);
     if (this.pickupTime === 0) this.state.pickup = null;
     for (const p of this.pickups) {
@@ -1354,10 +1508,12 @@ export class Arena {
     this.state.aiming = false;
     this.state.sprinting = false;
     this.state.crouching = false;
+    if (this.pvp) this.sendPvpInput();
   }
   selectWeapon(index: number) {
     if (!Number.isInteger(index) || index < 0 || index > 3) return false;
     this.state.weapon = index;
+    this.pvp?.send('weapon', index);
     this.state.ammo = this.clips[index];
     this.state.reserve = this.reserves[index];
     this.state.reloading = false;
@@ -1403,7 +1559,10 @@ export class Arena {
       if (this.keys.has('KeyC')) this.keys.delete('KeyC');
       else this.keys.add('KeyC');
     }
-    if (action === 'jump') this.motion.jumpBuffer = 0.13;
+    if (action === 'jump') {
+      this.motion.jumpBuffer = 0.13;
+      this.pvp?.send('jump', null);
+    }
     this.emit();
   }
   resetTraining() {
@@ -1422,6 +1581,7 @@ export class Arena {
     )
       return false;
     this.state.reloading = true;
+    this.pvp?.send('reload', null);
     this.state.aiming = false;
     this.reloadTime = WEAPONS[this.state.weapon].reload;
     this.reloadStage = 0;
@@ -1452,6 +1612,13 @@ export class Arena {
       this.state.weapon === 1 ? 0.15 : this.state.weapon === 2 ? 0.2 : 0.065;
     this.flashTime = 0.055;
     this.sound('shot');
+    if (this.pvp) {
+      this.sendPvpInput();
+      this.pvp.send('fire', null);
+      if (this.state.ammo === 0) this.reload();
+      this.emit();
+      return;
+    }
     this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
     this.camera.updateMatrixWorld(true);
     const origin = this.camera.position.clone();
@@ -1613,6 +1780,11 @@ export class Arena {
     this.audioEngine?.play(type, this.state.weapon);
   }
   private updateBots(dt: number) {
+    if (this.pvp) {
+      for (const b of this.bots)
+        if (b.alive) b.group.position.lerp(b.target, 1 - Math.exp(-15 * dt));
+      return;
+    }
     if (this.level.practice) {
       for (const bot of this.bots) {
         const origin = this.level.spawns[bot.id + 1];
@@ -1911,7 +2083,7 @@ export class Arena {
         this.sound('step');
       }
     }
-    if (this.state.reloading) {
+    if (this.state.reloading && !this.pvp) {
       const previousProgress =
         1 - this.reloadTime / WEAPONS[this.state.weapon].reload;
       this.reloadTime = Math.max(0, this.reloadTime - dt);
@@ -1952,6 +2124,13 @@ export class Arena {
     if (this.level.practice && this.trainingUnlimited) {
       this.state.reserve = this.reserves[this.state.weapon] =
         WEAPONS[this.state.weapon].reserve;
+    }
+    if (this.pvp) {
+      this.pvpInputTime += dt;
+      if (this.pvpInputTime >= 1 / 30) {
+        this.pvpInputTime = 0;
+        this.sendPvpInput();
+      }
     }
   }
   private updateGun(dt: number, active: boolean) {
@@ -2079,7 +2258,7 @@ export class Arena {
       active = this.state.phase === 'running' || this.state.phase === 'dead';
     if (active) this.elapsed += dt;
     if (active) {
-      if (!this.level.practice)
+      if (!this.level.practice && !this.pvp)
         this.state.time = Math.max(0, this.state.time - rawDt);
       this.immunity -= dt;
       this.hitTime = Math.max(0, this.hitTime - dt);
@@ -2093,9 +2272,9 @@ export class Arena {
       }
       if (this.state.phase === 'dead') {
         this.state.respawn -= dt;
-        if (this.state.respawn <= 0) this.respawnPlayer();
+        if (this.state.respawn <= 0 && !this.pvp) this.respawnPlayer();
       }
-      if (!this.level.practice && this.state.time <= 0) {
+      if (!this.level.practice && !this.pvp && this.state.time <= 0) {
         this.finish(false);
       }
     }
@@ -2254,7 +2433,7 @@ export class Arena {
     }
     ctx.globalAlpha = 1;
     for (const b of this.bots) {
-      if (!b.alive) continue;
+      if (!b.alive || this.pvp) continue;
       ctx.fillStyle = '#d78160';
       ctx.strokeStyle = '#fdfaf0';
       ctx.lineWidth = 2;

@@ -2178,6 +2178,188 @@ kbd {
   margin: 10px 0;
   font-size: 13px;
 }
+
+.pvp-lobby {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 24px 70px;
+}
+.pvp-lobby > a {
+  color: #486e64;
+  font-size: 14px;
+}
+.pvp-kicker {
+  display: block;
+  margin-top: 52px;
+  letter-spacing: 0.16em;
+  color: #5d9485;
+  font-size: 12px;
+}
+.pvp-lobby h1 {
+  font-size: clamp(36px, 7vw, 70px);
+  line-height: 1.2;
+  margin: 16px 0;
+}
+.pvp-lobby p {
+  line-height: 1.8;
+  margin: 16px 0;
+}
+.pvp-pool {
+  display: inline-block;
+  background: #d5e9dd;
+  padding: 10px 14px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.pvp-card {
+  background: #fffdf1;
+  border: 2px solid #546e63;
+  border-radius: 7px 14px 8px 10px;
+  box-shadow: 5px 6px 0 #a4c2ae55;
+  margin-top: 28px;
+  padding: 24px;
+}
+.pvp-card label {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0;
+  font-size: 14px;
+}
+.pvp-card input {
+  background: #f7f4e9;
+  border: 1px solid #9daa9b;
+  padding: 12px;
+  border-radius: 5px;
+  font-size: 16px;
+}
+.pvp-lobby button,
+.pvp-overlay button {
+  border: 1px solid #4b7565;
+  background: #d9eadd;
+  padding: 12px 20px;
+  border-radius: 5px;
+  min-height: 46px;
+  font-weight: bold;
+}
+.pvp-lobby button:disabled,
+.pvp-overlay button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pvp-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 18px 0;
+}
+.pvp-card ul {
+  padding: 0;
+  list-style: none;
+}
+.pvp-card li {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid #d7d9c9;
+}
+.pvp-card li span {
+  font-size: 12px;
+}
+.pvp-notice {
+  background: #f4deb5;
+  border-left: 3px solid #bc894c;
+  padding: 12px 18px;
+}
+.pvp-footnote {
+  font-size: 12px;
+  color: #6b7a70;
+}
+.pvp-hud {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  left: max(24px, env(safe-area-inset-left));
+  right: max(24px, env(safe-area-inset-right));
+  z-index: 4;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+  font: bold 15px monospace;
+}
+.pvp-hud > * {
+  background: #fffbeaeb;
+  padding: 10px;
+  border: 1px solid #648774;
+  border-radius: 5px;
+}
+.pvp-hidden-map {
+  display: none;
+}
+.pvp-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #23433b;
+  font: 38px monospace;
+  pointer-events: none;
+  text-shadow: 0 0 2px white;
+}
+.pvp-crosshair.confirmed {
+  color: #e95346;
+}
+.pvp-reload,
+.pvp-damage {
+  position: absolute;
+  top: 63%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: #fff8e7dd;
+  border-radius: 5px;
+  font-size: 14px;
+  pointer-events: none;
+}
+.pvp-damage {
+  top: 72%;
+  background: #a23436;
+  color: white;
+}
+.pvp-pause {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 5;
+  padding: 12px;
+  background: #fcf8eb;
+  border: 1px solid #668376;
+}
+.pvp-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  background: #f7f3e4de;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  text-align: center;
+}
+.pvp-overlay h1 {
+  font-size: 36px;
+}
+.touch-mode .pvp-hud {
+  left: 80px;
+  top: 12px;
+  right: 12px;
+  font-size: 11px;
+}
+.touch-mode .pvp-hud > * {
+  padding: 6px;
+}
 .training-options label {
   display: flex;
   justify-content: center;

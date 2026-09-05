@@ -116,6 +116,41 @@ function drawCount(root) {
   return count;
 }
 
+test('PVP client forwards shots while only server snapshots can damage opponents', async () => {
+  const { Battle } = await import('../server/battle.ts');
+  const battle = new Battle('desktop');
+  battle.join('a', 'A');
+  battle.join('b', 'B');
+  battle.players.forEach((p) => (p.ready = true));
+  battle.start('a');
+  const arena = fixture(),
+    sent = [];
+  arena.pvp = { id: 'a', send: (kind, data) => sent.push({ kind, data }) };
+  arena.pvpEvent = 0;
+  arena.applyPvp(battle.snapshot());
+  arena.cooldown = 0;
+  arena.bots[0].group.position.set(
+    arena.camera.position.x,
+    0,
+    arena.camera.position.z - 5,
+  );
+  arena.fire();
+  assert.ok(sent.some((m) => m.kind === 'fire'));
+  assert.equal(arena.bots[0].health, 100);
+  battle.players.get('a').health = 42;
+  battle.players.get('a').clips[3] = 2;
+  arena.applyPvp(battle.snapshot());
+  assert.equal(arena.state.health, 42);
+  assert.equal(arena.state.ammo, 2);
+  const pos = arena.bots[0].group.position.clone();
+  arena.updateBots(0.1);
+  assert.notEqual(
+    arena.bots[0].group.position.distanceTo(pos),
+    0,
+    'remote movement follows server interpolation',
+  );
+});
+
 test('every weapon automatically reloads immediately after its last real shot', () => {
   for (let w = 0; w < 4; w++) {
     const arena = fixture();

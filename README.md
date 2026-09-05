@@ -6,7 +6,7 @@ Excalidraw-inspired browser FPS, built with React, Three.js and Vinext. Arena ge
 
 On touch devices, play in landscape. The left stick has analog movement and sprints when fully pushed forward; drag the right side or the fire button to aim. Aim and crouch toggle; jump, reload, weapon cycle and pause have dedicated buttons. The rifle supports held fire; other weapons fire per press. Touch aiming uses the sensitivity setting. Touch play does not require pointer lock or native fullscreen. Portrait rotation, backgrounding and focus loss pause play and clear held inputs. Mobile renders without MSAA and uses 72% of the normal adaptive pixel ratio. Physical iOS/Android performance and sustained thermal behavior still need device testing.
 
-Select **练习画室** alongside the three combat maps for an untimed practice range with three static and two moving targets. Targets never attack and return two seconds after being knocked down. Range markings measure forward distance from the firing line. The HUD shows targets knocked down and shot hit rate. Pause to reset the session or toggle unlimited reserve ammunition; magazines still require reloading. Multiplayer and new competitive weapon rules remain planned work.
+Select **练习画室** alongside the three combat maps for an untimed practice range with three static and two moving targets. Targets never attack and return two seconds after being knocked down. Range markings measure forward distance from the firing line. The HUD shows targets knocked down and shot hit rate. Pause to reset the session or toggle unlimited reserve ammunition; magazines still require reloading. A first multiplayer prototype is available at `/pvp`; competitive weapon rules remain planned work.
 
 Click **全屏进入战场** to request fullscreen and raw pointer input. If fullscreen is unavailable, the arena fills the browser viewport. The weapon HUD overlays the canvas. Each map has a three-minute kill objective. Death triggers a three-second respawn with replenished ammunition. Esc and loss of window focus pause the match; **选择关卡 / 武器** returns to the window layout.
 
@@ -29,7 +29,7 @@ Reloading uses distinct weapon tilts, a support hand that grips the magazine or 
 
 Each map has its own Vitalezzz electronic score. Music streams only the selected local track; small Kenney effects are decoded once and reused, with a 24-voice limit. Music and effects have independent volume sliders and a shared mute. Pausing stops music playback; restarting gameplay resumes it. Source URLs and CC0 licenses are listed in `public/audio/credits.txt` and linked from settings. Music is normalized to -19 LUFS and encoded at 128 kbps; all audio files were checked with FFmpeg decoding. No subjective listening or browser audio QA is claimed.
 
-The pistol is semiautomatic, the shotgun fires eight pellets, the sniper has a 4× scope, and the rifle is automatic. Cover blocks movement and bullets. Opponents use a navigation distance field to route around cover and only shoot with line of sight. Desktop play uses WebGL and pointer lock; mobile play uses touch controls. Multiplayer networking remains outside this version.
+The pistol is semiautomatic, the shotgun fires eight pellets, the sniper has a 4× scope, and the rifle is automatic. Cover blocks movement and bullets. Opponents use a navigation distance field to route around cover and only shoot with line of sight. Desktop play uses WebGL and pointer lock; mobile play uses touch controls. PVP uses an independent authoritative Colyseus service; see [deployment instructions](server/DEPLOYMENT.md).
 
 The palette uses blue buildings, yellow and green cover, a lavender platform, and warm red enemies. Hits flash the opponent and update their overhead health bar, damage number, remaining-health panel, and hit/kill sound. Incoming hits show a directional marker, HP loss, a red edge flash, and a persistent low-health warning.
 
@@ -53,9 +53,9 @@ Source: https://github.com/joyehuang/paperstrike-arena
 
 Incoming fire displays a bright directional arc and an eight-direction Chinese label for 1.25 seconds. The marker tracks the location of the hit relative to the current camera as the player turns, rather than staying at its initial screen angle.
 
-`vercel.json` uses `npm run build:vercel` to export this same game as static HTML, JavaScript, CSS and local audio in `dist/client`. The build script sets `PAPERSTRIKE_TARGET=vercel`, which selects Vinext's static export and omits Worker-only plugins. No server functions or database are needed for this version.
+`vercel.json` uses `npm run build:vercel` to export this same game as static HTML, JavaScript, CSS and local audio in `dist/client`. The build script sets `PAPERSTRIKE_TARGET=vercel`, which selects Vinext's static export and omits Worker-only plugins. The single-player game needs no backend. PVP requires the separate service documented in `server/DEPLOYMENT.md`.
 
-Run `vercel deploy --prod` from the linked project to build and publish on Vercel. The standard `npm run build` continues to target the original Sites host. Use Vercel's cloud build when the native Windows prerender process fails during shutdown.
+Push to GitHub `main` to trigger the linked Vercel production deployment. The standard `npm run build` continues to target the original Sites host. Use Vercel's cloud build when the native Windows prerender process fails during shutdown.
 
 ## Implementation
 
@@ -69,6 +69,7 @@ Run `vercel deploy --prod` from the linked project to build and publish on Verce
 - `app/game/presentation.ts`: fullscreen and raw-pointer entry with browser fallbacks.
 - `app/game/webmcp.ts`: optional browser agent tools for match state and weapon selection.
 
-Validation includes TypeScript, the production build and 48 tests covering all-map reachability, terrace traversal, pickup limits and respawning, weapon reload completion/cancellation, projected reload-part visibility, level rebuilds, victory conditions, assembled scene draw count, shot-to-health feedback, cover, fixed-step movement at 30/60/144 Hz, camera damping, jump buffering, particle limits and fullscreen API fallback. Each assembled scene, including pickups, opponents and moving weapon parts, stays below 110 draws in the structural check. These tests run without a browser and do not measure GPU FPS. No interactive browser QA was performed. Optional WebMCP integration is feature-detected; a supported live WebMCP context was not available for validation.
+Validation includes TypeScript, the production build and 56 tests covering all-map reachability, terrace traversal, pickup limits and respawning, weapon reload completion/cancellation, projected reload-part visibility, level rebuilds, victory conditions, assembled scene draw count, shot-to-health feedback, cover, fixed-step movement at 30/60/144 Hz, camera damping, jump buffering, particle limits and fullscreen API fallback. Each assembled scene, including pickups, opponents and moving weapon parts, stays below 110 draws in the structural check. These tests run without a browser and do not measure GPU FPS. No interactive browser QA was performed. Optional WebMCP integration is feature-detected; a supported live WebMCP context was not available for validation.
 
 Implementation references: [MDN pointer lock and fullscreen ordering](https://developer.mozilla.org/en-US/docs/Web/API/Element/requestPointerLock), [Three.js geometry batching](https://threejs.org/manual/en/optimize-lots-of-objects.html).
+

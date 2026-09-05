@@ -11,10 +11,15 @@
     "build:vercel": "node scripts/build-vercel.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
-    "format": "oxfmt"
+    "format": "oxfmt",
+    "pvp:server": "tsx server/index.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
+    "@colyseus/core": "0.18.10",
+    "@colyseus/schema": "5.0.27",
+    "@colyseus/sdk": "0.18.2",
+    "@colyseus/ws-transport": "0.18.2",
     "@shadcn/react": "0.3.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
@@ -40,6 +45,7 @@
     "@cloudflare/workers-types": "4.20260515.1",
     "@openai/sites-vite-plugin": "0.2.0",
     "@tailwindcss/postcss": "4.2.1",
+    "@types/express": "5.0.6",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
@@ -50,6 +56,7 @@
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
     "tailwindcss": "4.2.1",
+    "tsx": "4.23.13",
     "typescript": "5.9.3",
     "vite": "8.0.13",
     "wrangler": "4.92.0"

@@ -247,6 +247,9 @@ export default function Home() {
           a little ink. a lot of action.<span className="note-arrow">↴</span>
         </div>
         <div className="header-actions">
+          <Link href="/pvp" className="text-button">
+            多人对战 ↗
+          </Link>
           <span className="prototype-tag">
             <span />
             可玩原型 v0.3
