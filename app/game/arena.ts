@@ -1786,17 +1786,28 @@ export class Arena {
       }
     }
     if (this.state.reloading) {
+      const previousProgress =
+        1 - this.reloadTime / WEAPONS[this.state.weapon].reload;
       this.reloadTime = Math.max(0, this.reloadTime - dt);
       const progress = 1 - this.reloadTime / WEAPONS[this.state.weapon].reload;
       const pose = reloadPose(this.state.weapon, progress);
       this.state.reloadProgress = Math.round(progress * 20) * 5;
       this.state.reloadLabel = pose.label;
-      if (pose.stage !== this.reloadStage) {
-        this.reloadStage = pose.stage;
-        this.sound(
-          pose.stage === 1 ? 'magOut' : pose.stage === 2 ? 'magIn' : 'bolt',
-        );
-      }
+      const cues: [number, Sound][] =
+        this.state.weapon === 1
+          ? [
+              [0.356, 'magIn'],
+              [0.526, 'magIn'],
+              [0.696, 'magIn'],
+              [0.8, 'bolt'],
+            ]
+          : [
+              [0.18, 'magOut'],
+              [0.67, 'magIn'],
+              [0.8, 'bolt'],
+            ];
+      for (const [at, sound] of cues)
+        if (previousProgress < at && progress >= at) this.sound(sound);
       if (this.reloadTime <= 0) {
         const amount = Math.min(
           WEAPONS[this.state.weapon].capacity - this.state.ammo,
@@ -1828,25 +1839,52 @@ export class Arena {
     if (this.magazine) {
       this.magazine.position.copy(this.magazine.userData.rest);
       this.magazine.position.y -= pose.remove * 0.28;
-      this.magazine.position.x -= pose.remove * 0.17;
-      this.magazine.rotation.z = -pose.remove * 0.25;
+      this.magazine.position.x -= pose.remove * 0.2;
+      this.magazine.position.z += pose.remove * 0.04;
+      this.magazine.rotation.z = -pose.remove * 0.45;
     }
     if (this.actionPart) {
       this.actionPart.position.copy(this.actionPart.userData.rest);
       this.actionPart.position.z +=
-        pose.rack * (this.state.weapon === 1 ? 0.18 : 0.1);
+        pose.rack * (this.state.weapon === 1 ? 0.24 : 0.15);
+      this.actionPart.rotation.z =
+        this.state.weapon === 2 ? -pose.reachAction * 0.55 : 0;
     }
     if (this.supportHand) {
       this.supportHand.position.copy(this.supportHand.userData.rest);
-      this.supportHand.position.x -= pose.remove * 0.13;
-      this.supportHand.position.y -= pose.remove * 0.24;
-      this.supportHand.position.z += reload * 0.08 + pose.rack * 0.12;
+      if (this.magazine) {
+        const grip = this.magazine.position
+          .clone()
+          .add(new THREE.Vector3(-0.065, -0.025, 0.065));
+        this.supportHand.position.lerp(grip, pose.grip);
+      }
+      if (this.actionPart) {
+        const action = this.actionPart.position
+          .clone()
+          .add(new THREE.Vector3(-0.08, -0.025, 0.02));
+        this.supportHand.position.lerp(action, pose.reachAction);
+      }
+      this.supportHand.rotation.z = -pose.remove * 0.45;
+      this.supportHand.rotation.x = -pose.reachAction * 0.3;
     }
     if (this.reloadShell) {
-      this.reloadShell.visible = this.state.reloading && pose.shell > 0;
+      this.reloadShell.visible = this.state.reloading && pose.shellVisible;
       this.reloadShell.position.copy(this.reloadShell.userData.rest);
-      this.reloadShell.position.x -= (1 - pose.shell) * 0.18;
-      this.reloadShell.position.y -= (1 - pose.shell) * 0.15;
+      this.reloadShell.position.x -= (1 - pose.shellTravel) * 0.25;
+      this.reloadShell.position.y -= (1 - pose.shellTravel) * 0.2;
+      this.reloadShell.position.z += (1 - pose.shellTravel) * 0.08;
+      this.reloadShell.scale.setScalar(
+        pose.shellVisible ? 1 - Math.max(0, (pose.shell - 0.76) / 0.12) : 1,
+      );
+      if (this.supportHand) {
+        this.supportHand.position.lerp(
+          this.reloadShell.position
+            .clone()
+            .add(new THREE.Vector3(-0.055, -0.03, 0.055)),
+          pose.grip,
+        );
+        this.supportHand.rotation.z -= 0.25 * pose.grip;
+      }
     }
     this.swayX = damp(this.swayX, 0, 14, dt);
     this.swayY = damp(this.swayY, 0, 14, dt);
@@ -1854,7 +1892,7 @@ export class Arena {
       Math.sin(this.bob) * 0.006 * this.bobAmplitude * (aim ? 0.15 : 1);
     this.gun.position.x = damp(
       this.gun.position.x,
-      (aim ? 0 : 0.37) - reload * 0.14 - this.swayX + gunBob,
+      (aim ? 0 : 0.37) - reload * 0.18 - this.swayX + gunBob,
       18,
       dt,
     );
@@ -1870,25 +1908,33 @@ export class Arena {
     );
     this.gun.position.z = damp(
       this.gun.position.z,
-      -0.52 + this.recoil - reload * 0.18,
+      -0.52 +
+        this.recoil -
+        reload * 0.2 +
+        pose.seat * 0.035 -
+        pose.settle * 0.02,
       22,
       dt,
     );
     this.gun.rotation.x = damp(
       this.gun.rotation.x,
-      this.recoil - this.sprintBlend * 0.1 + reload * 0.2,
+      this.recoil -
+        this.sprintBlend * 0.1 +
+        reload * 0.2 -
+        pose.seat * 0.06 +
+        pose.settle * 0.035,
       16,
       dt,
     );
     this.gun.rotation.y = damp(
       this.gun.rotation.y,
-      (aim ? 0 : -0.06) + reload * 0.4,
+      (aim ? 0 : -0.06) + pose.turn,
       16,
       dt,
     );
     this.gun.rotation.z = damp(
       this.gun.rotation.z,
-      -reload * 0.75 - this.sprintBlend * 0.045,
+      -pose.tilt - this.sprintBlend * 0.045,
       14,
       dt,
     );

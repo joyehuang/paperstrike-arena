@@ -355,3 +355,70 @@ test('reloading visibly moves the magazine or shell within the view without movi
     );
   }
 });
+
+test('reload hands hold the magazine and animated parts stay visible throughout the sequence', () => {
+  for (let w = 0; w < 4; w++) {
+    const arena = fixture();
+    arena.selectWeapon(w);
+    Object.assign(arena, {
+      recoil: 0,
+      swayX: 0,
+      swayY: 0,
+      bob: 0,
+      bobAmplitude: 0,
+      sprintBlend: 0,
+      flashTime: 0,
+    });
+    const view = new THREE.PerspectiveCamera(60, 16 / 9, 0.01, 10);
+    arena.state.reloading = true;
+    for (let frame = 0; frame <= 120; frame++) {
+      const p = frame / 120;
+      arena.reloadTime = WEAPONS[w].reload * (1 - p);
+      arena.updateGun(WEAPONS[w].reload / 120, true);
+      arena.gun.updateMatrixWorld(true);
+      if (p >= 0.2 && p <= 0.85) {
+        for (const part of [
+          arena.magazine,
+          arena.reloadShell,
+          arena.supportHand,
+        ].filter(Boolean)) {
+          if (!part.visible) continue;
+          const screen = part
+            .getWorldPosition(new THREE.Vector3())
+            .project(view);
+          assert.ok(
+            Math.abs(screen.x) < 1 && Math.abs(screen.y) < 1,
+            `weapon ${w} progress ${p}: part outside screen ${screen.toArray()}`,
+          );
+        }
+      }
+      if (arena.magazine && p >= 0.2 && p <= 0.65)
+        assert.ok(
+          arena.supportHand.position.distanceTo(arena.magazine.position) < 0.12,
+        );
+    }
+    assert.ok(
+      arena.supportHand.position.distanceTo(arena.supportHand.userData.rest) <
+        0.001,
+    );
+  }
+});
+
+test('reload mechanical cues occur once at insertion and action contact points', () => {
+  for (let w = 0; w < 4; w++) {
+    const arena = fixture();
+    arena.selectWeapon(w);
+    arena.state.ammo = arena.clips[w] = 0;
+    const cues = [];
+    arena.audioEngine.play = (type) => cues.push(type);
+    arena.reload();
+    for (let t = 0; t < WEAPONS[w].reload + 0.1; t += PHYSICS_STEP)
+      arena.updatePlayer(PHYSICS_STEP);
+    assert.deepEqual(
+      cues,
+      w === 1
+        ? ['reload', 'magIn', 'magIn', 'magIn', 'bolt']
+        : ['reload', 'magOut', 'magIn', 'bolt'],
+    );
+  }
+});

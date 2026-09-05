@@ -49,12 +49,25 @@ export function reloadPose(weapon: number, progress: number) {
   const rack = smooth(0.72, 0.8, p) * (1 - smooth(0.81, 0.9, p));
   const shell = p >= 0.22 && p < 0.73 ? ((p - 0.22) / 0.17) % 1 : 0;
   const stage = p < 0.18 ? 0 : p < 0.48 ? 1 : p < 0.72 ? 2 : 3;
+  const grip = smooth(0.05, 0.18, p) * (1 - smooth(0.68, 0.73, p));
+  const reachAction = smooth(0.7, 0.76, p) * (1 - smooth(0.87, 0.96, p));
+  const seat = smooth(0.64, 0.68, p) * (1 - smooth(0.68, 0.73, p));
+  const settle = smooth(0.86, 0.9, p) * (1 - smooth(0.9, 0.98, p));
+  const shellTravel = smooth(0.05, 0.8, shell) * (1 - smooth(0.88, 1, shell));
   return {
     lift,
     remove,
     rack,
     shell,
     stage,
+    grip,
+    reachAction,
+    seat,
+    settle,
+    shellTravel,
+    shellVisible: shell > 0.02 && shell < 0.88,
+    tilt: [0.9, 1.22, 0.68, 0.86][weapon] * lift,
+    turn: [0.48, 0.24, 0.55, 0.42][weapon] * lift,
     label:
       weapon === 1
         ? ['翻转枪身', '压入霰弹', '补充霰弹', '推拉护木'][stage]
