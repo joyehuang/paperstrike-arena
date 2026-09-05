@@ -20,6 +20,8 @@ const index = path.join(output, 'index.html');
 if (!existsSync(index))
   throw new Error('Static export did not produce index.html.');
 const html = readFileSync(index, 'utf8');
+if (!existsSync(path.join(output, 'pvp.html')))
+  throw new Error('Static export did not produce the PVP lobby.');
 if (!html.includes('PAPER') || !html.includes('<script')) {
   throw new Error('Export is missing the game or its client entry point.');
 }
