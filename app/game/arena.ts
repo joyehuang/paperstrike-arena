@@ -342,6 +342,11 @@ export class Arena {
   private pvpHistory = new Map<number, { x: number; z: number }>();
   private pvpInitialized = false;
   private pvpLastAck = -1;
+  private nameplates = new Map<string, HTMLDivElement>();
+  private nameplatePoint = new THREE.Vector3();
+  private nameplateDirection = new THREE.Vector3();
+  private pvpFeedExpiry = new Map<number, number>();
+  private maxResolutionQuality = 1;
   private touchForward = 0;
   private touchRight = 0;
   private host: HTMLDivElement;
@@ -1220,6 +1225,8 @@ export class Arena {
       b.alive = !!p && p.health > 0;
       b.group.visible = b.alive;
       if (!p) return;
+      b.group.userData.playerId = p.id;
+      b.group.userData.playerName = p.name;
       const label = b.group.getObjectByName('player-name') as
         | THREE.Sprite
         | undefined;
@@ -1249,6 +1256,19 @@ export class Arena {
     for (const event of snapshot.events) {
       if (event.id <= this.pvpEvent) continue;
       this.pvpEvent = event.id;
+      if (event.kind === 'hit' && event.health === 0 && event.target) {
+        const killer =
+          snapshot.players.find((p) => p.id === event.actor)?.name || '玩家';
+        const victim =
+          snapshot.players.find((p) => p.id === event.target)?.name || '玩家';
+        const id = event.id;
+        this.state.feed = [
+          ...this.state.feed.slice(-3),
+          { id, text: `${killer} 击杀了 ${victim}` },
+        ];
+        this.pvpFeedExpiry ||= new Map();
+        this.pvpFeedExpiry.set(id, performance.now() + 6000);
+      }
       if (event.kind === 'shot' && event.actor !== own.id) {
         const shooter = others.find((p) => p.id === event.actor);
         if (shooter) {
@@ -1834,6 +1854,71 @@ export class Arena {
       { id: Date.now() + this.rng++, text },
     ];
   }
+  setPerformanceMode(enabled: boolean) {
+    this.maxResolutionQuality = enabled ? 0.7 : 1;
+    this.resolutionQuality = this.maxResolutionQuality;
+    this.resize();
+  }
+  private updateNameplates() {
+    if (!this.pvp || !this.host || typeof document === 'undefined') return;
+    this.nameplates ||= new Map();
+    this.nameplatePoint ||= new THREE.Vector3();
+    this.nameplateDirection ||= new THREE.Vector3();
+    const width = this.host.clientWidth,
+      height = this.host.clientHeight;
+    const seen = new Set<string>();
+    for (const b of this.bots) {
+      const id = b.group.userData.playerId as string | undefined;
+      if (!id) continue;
+      seen.add(id);
+      let node = this.nameplates.get(id);
+      if (!node) {
+        node = document.createElement('div');
+        node.className = 'player-nameplate';
+        node.dataset.playerId = id;
+        this.host.appendChild(node);
+        this.nameplates.set(id, node);
+      }
+      if (node.textContent !== b.group.userData.playerName)
+        node.textContent = b.group.userData.playerName;
+      const sprite = b.group.getObjectByName('player-name');
+      if (sprite) sprite.visible = false;
+      const point = this.nameplatePoint.set(
+        b.group.position.x,
+        b.group.position.y + 2.25 * b.group.scale.y,
+        b.group.position.z,
+      );
+      const direction = this.nameplateDirection
+        .copy(point)
+        .sub(this.camera.position);
+      const distance = direction.length();
+      direction.normalize();
+      const visible =
+        b.alive &&
+        distance < 55 &&
+        worldHitDistance(
+          this.camera.position,
+          direction,
+          distance,
+          this.level.obstacles,
+        ) >=
+          distance - 0.1;
+      point.project(this.camera);
+      node.hidden =
+        !visible ||
+        point.z < -1 ||
+        point.z > 1 ||
+        Math.abs(point.x) > 1 ||
+        Math.abs(point.y) > 1;
+      if (!node.hidden)
+        node.style.transform = `translate(${((point.x + 1) * width) / 2}px,${((1 - point.y) * height) / 2}px) translate(-50%,-100%)`;
+    }
+    for (const [id, node] of this.nameplates)
+      if (!seen.has(id)) {
+        node.remove();
+        this.nameplates.delete(id);
+      }
+  }
   private sound(type: Sound) {
     this.audioEngine?.play(type, this.state.weapon);
   }
@@ -2401,6 +2486,16 @@ export class Arena {
     this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
     this.renderer.render(this.gunScene, this.gunCamera);
+    this.updateNameplates();
+    if (this.pvp && this.state.feed.length) {
+      const now = performance.now();
+      for (const [id, expiry] of this.pvpFeedExpiry || [])
+        if (expiry <= now) this.pvpFeedExpiry.delete(id);
+      const next = this.state.feed.filter(
+        (item) => (this.pvpFeedExpiry?.get(item.id) || 0) > now,
+      );
+      if (next.length !== this.state.feed.length) this.state.feed = next;
+    }
     if (active && rawDt > 0) {
       this.frameAverage = damp(this.frameAverage, Math.min(rawDt, 0.1), 1, dt);
       this.fpsTime += rawDt;
@@ -2416,7 +2511,10 @@ export class Arena {
           this.frameAverage > 0.023
             ? Math.max(0.65, this.resolutionQuality - 0.1)
             : this.frameAverage < 0.0175
-              ? Math.min(1, this.resolutionQuality + 0.05)
+              ? Math.min(
+                  this.maxResolutionQuality,
+                  this.resolutionQuality + 0.05,
+                )
               : this.resolutionQuality;
         if (next !== this.resolutionQuality) {
           this.resolutionQuality = next;
@@ -2440,7 +2538,6 @@ export class Arena {
   };
 
   private drawMap() {
-    if (this.pvp) return;
     const ctx = this.map.getContext('2d');
     if (!ctx) return;
     const w = this.map.width,
@@ -2619,6 +2716,8 @@ export class Arena {
     }
   }
   dispose() {
+    this.nameplates?.forEach((node) => node.remove());
+    this.nameplates?.clear();
     this.disposed = true;
     cancelAnimationFrame(this.frame);
     this.abort.abort();

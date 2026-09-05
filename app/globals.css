@@ -2529,3 +2529,40 @@ kbd {
     border-radius: 6px;
   }
 }
+
+/* PVP shares PVE's paper HUD; only placement and multiplayer information differ. */
+.player-nameplate {
+  position: absolute; left: 0; top: 0; z-index: 2;
+  pointer-events: none; white-space: nowrap; max-width: 180px;
+  overflow: hidden; text-overflow: ellipsis; padding: 3px 8px;
+  background: #fffdf0ed; color: #294b55; border: 1px solid #607c7e;
+  border-radius: 3px 5px 2px 4px; box-shadow: 1px 2px 0 #263f4730;
+  font: 600 14px/1.35 sans-serif;
+}
+.player-nameplate[hidden] { display: none; }
+.pvp-match .minimap-card { top: 96px; }
+.pvp-match .pvp-kill-feed { top: 28px; left: auto; right: 28px; align-items: flex-end; max-width: 34%; }
+.pvp-kill-feed > div { font-size: 12px; border-left: 3px solid #cf7953; }
+.pvp-match .pvp-pause { top: 90px; right: auto; left: 28px; display: flex; align-items: center; gap: 8px; }
+.pvp-performance { display: flex; justify-content: center; align-items: center; gap: 8px; font-size: 12px; color: #65746b; margin: 15px 0; }
+.pvp-performance input { accent-color: #668c75; }
+.pvp-result-heading { display: flex; align-items: center; gap: 16px; color: #b68c3d; margin-bottom: 18px; }
+.pvp-result-heading .handwritten { font-size: 28px; }
+.pvp-results h2 { font-size: clamp(23px,4vw,34px); color: #34483c; }
+.pvp-results .result-stats { border-top: 1px dashed #b8b5a4; border-bottom: 1px dashed #b8b5a4; padding: 22px 0; margin: 22px 0; }
+.pvp-scoreboard { width: 100%; border-collapse: collapse; margin: 22px 0; font-size: 14px; }
+.pvp-scoreboard th, .pvp-scoreboard td { padding: 14px 10px; border-bottom: 1px solid #d8d4c6; text-align: left; }
+.pvp-scoreboard thead { color: #85816e; font-size: 11px; letter-spacing: 1px; }
+.pvp-scoreboard .is-you { background: #dfebe2; }
+.pvp-scoreboard small { margin-left: 8px; color: #64866e; font-weight: 400; }
+.pvp-scoreboard th[scope='row'] { overflow-wrap: anywhere; }
+.pvp-lobby { max-width: 960px; }
+.pvp-lobby h1 { font-family: var(--hand); }
+.pvp-lobby .pvp-results { background: #fffdf3; border-color: #898775; box-shadow: 6px 7px 0 #d3ccb94a; }
+@media (max-width: 700px) {
+ .pvp-match .game-top-left small { max-width: 190px; font-size: 10px; }
+ .pvp-match .pvp-kill-feed { right: 12px; top: 62px; max-width: 52%; }
+ .pvp-kill-feed > div { font-size: 10px; padding: 4px 6px; }
+ .pvp-match .minimap-card { top: 134px; right: 12px; }
+ .pvp-scoreboard th, .pvp-scoreboard td { padding: 10px 5px; font-size: 12px; }
+}

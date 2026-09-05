@@ -614,3 +614,73 @@ test('PVP acknowledgements preserve predicted movement and cache overhead nickna
     'unchanged name does not upload a new texture',
   );
 });
+
+test('PVP screen labels remain legible, obey cover, and never label yourself', async () => {
+  const { Battle } = await import('../server/battle.ts');
+  const battle = new Battle('desktop');
+  battle.join('a', '自己');
+  battle.join('b', '朋友的昵称');
+  const arena = fixture();
+  arena.pvp = { id: 'a', send() {} };
+  arena.pvpEvent = 0;
+  arena.applyPvp(battle.snapshot());
+  const nodes = [];
+  arena.host = {
+    clientWidth: 1280,
+    clientHeight: 720,
+    appendChild(node) {
+      nodes.push(node);
+    },
+  };
+  const prior = globalThis.document;
+  globalThis.document = {
+    createElement: () => ({
+      dataset: {},
+      style: {},
+      hidden: false,
+      textContent: '',
+      remove() {},
+    }),
+  };
+  try {
+    arena.camera.position.set(0, 1.72, 10);
+    arena.camera.lookAt(0, 1.72, 0);
+    arena.camera.updateMatrixWorld(true);
+    arena.bots[0].group.position.set(0, 0, 5);
+    arena.updateNameplates();
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].textContent, '朋友的昵称');
+    assert.equal(nodes[0].hidden, false);
+    assert.ok(nodes[0].style.transform.includes('translate('));
+    arena.bots[0].group.position.set(0, 0, -5);
+    arena.updateNameplates();
+    assert.equal(
+      nodes[0].hidden,
+      true,
+      'central cover hides the overhead label',
+    );
+    arena.bots[0].group.position.set(0, 0, 15);
+    arena.updateNameplates();
+    assert.equal(nodes[0].hidden, true, 'behind-camera label is hidden');
+  } finally {
+    globalThis.document = prior;
+  }
+});
+
+test('PVP kill feed names both players and does not repeat snapshot events', async () => {
+  const { Battle } = await import('../server/battle.ts');
+  const battle = new Battle('desktop');
+  battle.join('a', '甲');
+  battle.join('b', '乙');
+  const arena = fixture();
+  arena.pvp = { id: 'a', send() {} };
+  arena.pvpEvent = 0;
+  const snapshot = battle.snapshot();
+  snapshot.events = [
+    { id: 1, kind: 'hit', actor: 'a', target: 'b', health: 0, damage: 100 },
+  ];
+  arena.applyPvp(snapshot);
+  arena.applyPvp(snapshot);
+  assert.equal(arena.state.feed.length, 1);
+  assert.equal(arena.state.feed[0].text, '甲 击杀了 乙');
+});

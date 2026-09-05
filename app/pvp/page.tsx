@@ -12,6 +12,10 @@ import {
   type PvpMode,
 } from '../game/pvp-protocol';
 import { damageLabel } from '../game/combat-feedback';
+import { CombatVitals, CombatReticle } from '../combat-hud';
+import { Crosshair, RotateCcw, Pause, Trophy } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { LEVELS } from '../game/levels';
 
 function Match({
   room,
@@ -30,6 +34,7 @@ function Match({
     [game, setGame] = useState<Snapshot | null>(null),
     [error, setError] = useState('');
   const [rtt, setRtt] = useState<number | null>(null);
+  const [performanceMode, setPerformanceMode] = useState(false);
   useEffect(() => {
     if (!host.current || !map.current) return;
     const a = new Arena(host.current, map.current, setGame, setError);
@@ -71,68 +76,228 @@ function Match({
     arena?.start();
   };
   const paused = !game || ['ready', 'paused'].includes(game.phase);
+  const level = LEVELS[0];
   return (
     <main
       className={`app play-mode pvp-match ${arena?.touchMode ? 'touch-mode' : ''}`}
     >
-      <div className={`game-frame ${game?.hurt ? 'hurt' : ''}`}>
+      <div
+        className={`game-frame ${game?.aiming && game.weapon === 2 ? 'scoped' : ''} ${game?.hurt ? 'hurt' : ''} ${game && game.health <= 30 ? 'critical-health' : ''}`}
+      >
         <div className="scene" ref={host} />
-        <canvas ref={map} className="pvp-hidden-map" />
-        <div className="pvp-hud">
-          <span>
-            HP {Math.ceil(game?.health ?? 100)} · 护甲{' '}
-            {Math.ceil(game?.armor ?? 0)}
-          </span>
-          <strong>
-            {Math.ceil(game?.time ?? snapshot.remaining)} 秒 ·{' '}
-            {game?.fps ?? '—'} FPS · {rtt === null ? '测延迟中' : `${rtt} ms`}
-          </strong>
-          <span>
-            {game?.ammo ?? 0} / {game?.reserve ?? 0} ·{' '}
-            {WEAPONS[game?.weapon ?? 3].name}
-          </span>
+        <div className="game-top-left">
+          <span className="live-dot" />
+          <span>{online ? 'LIVE MATCH' : 'RECONNECTING'}</span>
+          <small>
+            {PVP_MODES[snapshot.mode || 'classic'].name} · {game?.fps || '—'}{' '}
+            FPS · {rtt === null ? '测延迟中' : rtt + ' ms'}
+          </small>
         </div>
-        <div className={`pvp-crosshair ${game?.hit ? 'confirmed' : ''}`}>
-          {game?.aiming && game.weapon === 2 ? '⊕' : '+'}
-        </div>
-        {game?.reloading && (
-          <div className="pvp-reload">
-            {game.reloadLabel} · {game.reloadProgress}%
+        <div className="match-score">
+          <div>
+            <span className="score-number">
+              {String(game?.kills || 0).padStart(2, '0')}
+            </span>
+            <span className="score-label">击杀</span>
           </div>
+          <div className="match-time">
+            <span>
+              {Math.floor((game?.time ?? snapshot.remaining) / 60)}
+              <b>:</b>
+              {String(
+                Math.ceil(game?.time ?? snapshot.remaining) % 60,
+              ).padStart(2, '0')}
+            </span>
+            <small>TIME LEFT</small>
+          </div>
+          <div>
+            <span className="score-number secondary">
+              {String(game?.deaths || 0).padStart(2, '0')}
+            </span>
+            <span className="score-label">阵亡</span>
+          </div>
+        </div>
+        <aside className="minimap-card">
+          <div className="minimap-title">
+            {level.english}
+            <span>N ↑</span>
+          </div>
+          <canvas
+            ref={map}
+            width={320}
+            height={280}
+            aria-label="小地图：自己、地图掩体和补给，不显示其他玩家的位置"
+          />
+          <div className="map-legend">
+            <span>
+              <i className="player-dot" />你
+            </span>
+            <small>{level.name}</small>
+          </div>
+          <div className="supply-legend">
+            <span>＋ 回血</span>
+            <span>▰ 弹药</span>
+            <span>◇ 护甲</span>
+          </div>
+        </aside>
+        <div className="kill-feed pvp-kill-feed" aria-live="polite">
+          {game?.feed.map((item) => (
+            <div key={item.id}>
+              <span>{item.text}</span>
+              <Crosshair size={12} />
+            </div>
+          ))}
+        </div>
+        {game && !paused && game.phase !== 'dead' && (
+          <>
+            <CombatReticle game={game} />
+            {game.hurt && game.lastHurt && (
+              <div key={game.lastHurt.id} className="received-hit">
+                <div
+                  className="damage-direction"
+                  style={{
+                    transform: `translate(-50%,-50%) rotate(${game.lastHurt.angle}rad)`,
+                  }}
+                >
+                  <i className="damage-arc" />
+                  <span>▼</span>
+                </div>
+                <p>
+                  <b className="damage-bearing-label">
+                    {damageLabel(game.lastHurt.angle)}来袭
+                  </b>
+                  −{game.lastHurt.damage} HP
+                </p>
+              </div>
+            )}
+            {game.reloading && (
+              <div className="reload-feedback">
+                <div>
+                  <RotateCcw size={15} />
+                  <strong>{game.reloadLabel}</strong>
+                  <span>{game.reloadProgress}%</span>
+                </div>
+                <Progress value={game.reloadProgress} aria-label="换弹进度" />
+              </div>
+            )}
+            {game.health <= 30 && (
+              <div className="critical-notice">
+                生命值过低 · 寻找绿色急救包 ＋
+              </div>
+            )}
+            <div className="movement-indicator">
+              {game.sprinting ? '↑ 冲刺中' : game.crouching ? '↓ 蹲伏中' : ''}
+            </div>
+          </>
         )}
-        {game?.hurt && game.lastHurt && (
-          <div className="pvp-damage">
-            {damageLabel(game.lastHurt.angle)}来袭 · −{game.lastHurt.damage}
-          </div>
+        {game && <CombatVitals game={game} reload={() => arena?.reload()} />}
+        {!arena?.touchMode && (
+          <>
+            <div className="combat-loadout">
+              {WEAPONS.map((w, i) => (
+                <button
+                  key={w.name}
+                  disabled={(snapshot.mode || 'classic') !== 'classic'}
+                  className={game?.weapon === i ? 'active' : ''}
+                  onClick={() => arena?.selectWeapon(i)}
+                >
+                  <b>{i + 1}</b>
+                  {w.name}
+                </button>
+              ))}
+            </div>
+            <button
+              className="pvp-pause"
+              onClick={() => arena?.pause()}
+              aria-label="暂停"
+            >
+              <Pause size={15} /> Esc
+            </button>
+          </>
         )}
         {game?.phase === 'dead' && (
-          <div className="pvp-reload">
-            {Math.max(0, Math.ceil(game.respawn))} 秒后重生
+          <div className="death-overlay">
+            <span className="handwritten">erased!</span>
+            <h2>被擦掉了。</h2>
+            <p>{Math.max(0, Math.ceil(game.respawn))} 秒后，重新落笔。</p>
           </div>
         )}
         {arena?.touchMode && game?.phase === 'running' && (
           <TouchControls arena={arena} game={game} />
         )}
-        {!arena?.touchMode && (
-          <button className="pvp-pause" onClick={() => arena?.pause()}>
-            暂停 / Esc
-          </button>
-        )}
         {(paused || !online) && (
-          <div className="pvp-overlay">
-            <h1>{online ? '进入对战' : '正在重连…'}</h1>
-            <p>手机与电脑分池 · 单人暂停不会暂停其他玩家</p>
-            <p>{error}</p>
-            <button disabled={!arena || !online} onClick={play}>
-              进入 / 继续
-            </button>
-            <button onClick={leave}>离开房间</button>
+          <div className="start-overlay">
+            <div className="start-panel">
+              <span className="handwritten overline">
+                {online ? 'make your mark.' : 'hold that thought.'}
+              </span>
+              <h1>
+                {online ? (
+                  <>
+                    准备好，
+                    <br />
+                    大画一场。
+                  </>
+                ) : (
+                  '正在重新连线。'
+                )}
+              </h1>
+              <p>
+                {PVP_MODES[snapshot.mode || 'classic'].description}{' '}
+                暂停时对局仍会继续。
+              </p>
+              <div className="level-objective">
+                <span>01 / {level.name}</span>
+                <b>真人对战 · 三分钟</b>
+              </div>
+              <label className="pvp-performance">
+                <input
+                  type="checkbox"
+                  checked={performanceMode}
+                  onChange={(e) => {
+                    setPerformanceMode(e.target.checked);
+                    arena?.setPerformanceMode(e.target.checked);
+                  }}
+                />
+                流畅画质 · 降低渲染分辨率
+              </label>
+              {error && (
+                <p role="alert" className="pvp-notice">
+                  {error}
+                </p>
+              )}
+              <button
+                className="start-button"
+                disabled={!arena || !online}
+                onClick={play}
+              >
+                <Crosshair size={19} />
+                {online ? '进入 / 继续' : '等待重连…'}
+                <span>↗</span>
+              </button>
+              <div className="start-hint">
+                {arena?.touchMode
+                  ? '横屏 · 左手移动 · 右手瞄准'
+                  : '全屏 · 锁定鼠标 · Esc 暂停'}
+              </div>
+              <button className="leave-combat" onClick={leave}>
+                返回房间大厅 ↙
+              </button>
+            </div>
+            <div className="scribble-note">
+              <span>
+                这次纸上的对手，
+                <br />
+                是你的朋友。
+              </span>
+            </div>
           </div>
         )}
       </div>
     </main>
   );
 }
+
 export default function PvpPage() {
   const [endpoint, setEndpoint] = useState(''),
     [mode, setMode] = useState<PvpMode>('classic'),
@@ -242,6 +407,14 @@ export default function PvpPage() {
       <Match room={room} snapshot={snapshot} online={online} leave={leave} />
     );
   const own = snapshot?.players.find((p) => p.id === room?.sessionId);
+  const ended = snapshot?.phase === 'ended';
+  const standings = [...(snapshot?.players || [])].sort(
+    (a, b) => b.kills - a.kills || a.deaths - b.deaths || a.slot - b.slot,
+  );
+  const winner = standings[0];
+  const leaders = standings.filter(
+    (p) => p.kills === winner?.kills && p.deaths === winner?.deaths,
+  );
   return (
     <main className="pvp-lobby">
       <Link href="/" prefetch={false}>
@@ -249,9 +422,19 @@ export default function PvpPage() {
       </Link>
       <span className="pvp-kicker">PAPERSTRIKE / PVP</span>
       <h1>
-        叫上朋友，
-        <br />
-        在纸上交锋。
+        {ended ? (
+          <>
+            这一页，
+            <br />
+            留下了战绩。
+          </>
+        ) : (
+          <>
+            叫上朋友，
+            <br />
+            在纸上交锋。
+          </>
+        )}
       </h1>
       <p>2–4 人 · 废稿堆场 · 3 分钟自由混战</p>
       <strong className="pvp-pool">
@@ -319,8 +502,38 @@ export default function PvpPage() {
           </button>
         </div>
       ) : (
-        <div className="pvp-card">
-          <h2>{snapshot?.phase === 'ended' ? '本局结束' : '等待队友'}</h2>
+        <div className={`pvp-card ${ended ? 'pvp-results' : ''}`}>
+          {ended && (
+            <div className="pvp-result-heading">
+              <Trophy size={34} />
+              <span className="handwritten">page complete.</span>
+            </div>
+          )}
+          <h2>
+            {ended
+              ? leaders.length > 1
+                ? '势均力敌，一起落款。'
+                : `${winner?.name || '画手'}，拿下这一页。`
+              : '等待朋友落座。'}
+          </h2>
+          {ended && (
+            <div className="result-stats">
+              <span>
+                <b>{own?.kills || 0}</b>你的击杀
+              </span>
+              <span>
+                <b>{own?.deaths || 0}</b>你的阵亡
+              </span>
+              <span>
+                <b>
+                  {own
+                    ? (own.kills / Math.max(1, own.deaths)).toFixed(1)
+                    : '0.0'}
+                </b>
+                K / D
+              </span>
+            </div>
+          )}
           <p>
             {PVP_MODES[snapshot?.mode || 'classic'].name} ·{' '}
             {PVP_MODES[snapshot?.mode || 'classic'].description}
@@ -347,20 +560,42 @@ export default function PvpPage() {
           <p>
             房间码 <strong>{room.roomId}</strong>
           </p>
-          <ul>
-            {snapshot?.players.map((p) => (
-              <li key={p.id}>
-                <b>{p.name}</b>
-                <span>
-                  {p.kills} 击杀 / {p.deaths} 阵亡 ·{' '}
-                  {!p.connected ? '重连中' : p.ready ? '已准备' : '未准备'}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <table className="pvp-scoreboard">
+            <thead>
+              <tr>
+                <th>名次</th>
+                <th>画手</th>
+                <th>击杀</th>
+                <th>阵亡</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {standings.map((p, i) => (
+                <tr key={p.id} className={p.id === own?.id ? 'is-you' : ''}>
+                  <td>
+                    {ended
+                      ? standings.findIndex(
+                          (v) => v.kills === p.kills && v.deaths === p.deaths,
+                        ) + 1
+                      : i + 1}
+                  </td>
+                  <th scope="row">
+                    {p.name}
+                    {p.id === own?.id && <small>你</small>}
+                  </th>
+                  <td>{p.kills}</td>
+                  <td>{p.deaths}</td>
+                  <td>
+                    {!p.connected ? '重连中' : p.ready ? '已准备' : '未准备'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           <div className="pvp-buttons">
             <button onClick={() => room.send('ready', !own?.ready)}>
-              {own?.ready ? '取消准备' : '准备'}
+              {own?.ready ? '取消准备' : ended ? '再画一局 · 准备' : '准备'}
             </button>
             {snapshot?.host === room.sessionId && (
               <button
