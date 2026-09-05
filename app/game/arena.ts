@@ -1,4 +1,16 @@
 import * as THREE from 'three';
+import { batchSketch, CombatEffects, renderPixelRatio } from './rendering';
+import { enterCombatView } from './presentation';
+import {
+  PHYSICS_STEP,
+  createMotion,
+  stepMotion,
+  damp,
+  viewFov,
+  obstacleColor,
+  rayBox,
+  worldHitDistance,
+} from './rules';
 import {
   WEAPONS,
   OBSTACLES,
@@ -27,6 +39,21 @@ export type Snapshot = {
   hits: number;
   sprinting: boolean;
   crouching: boolean;
+  fps: number;
+  lastHit: {
+    id: number;
+    damage: number;
+    health: number;
+    target: number;
+    headshot: boolean;
+    killed: boolean;
+  } | null;
+  lastHurt: {
+    id: number;
+    damage: number;
+    angle: number;
+    target: number;
+  } | null;
 };
 type Bot = {
   group: THREE.Group;
@@ -38,16 +65,13 @@ type Bot = {
   legs: THREE.Group[];
   target: THREE.Vector3;
   repath: number;
+  healthBar: THREE.Sprite;
+  flash: number;
+  surface: THREE.MeshLambertMaterial;
 };
-type Particle = {
-  object: THREE.Object3D;
-  velocity: THREE.Vector3;
-  life: number;
-  max: number;
-};
-const ink = 0x494a40,
-  paper = 0xeae7d7,
-  orange = 0xd88967;
+const ink = 0x394755,
+  paper = 0xf1ead7,
+  orange = 0xe77863;
 const seeded = (n: number) => {
   const v = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
   return v - Math.floor(v);
@@ -272,10 +296,14 @@ export class Arena {
     hits: 0,
     sprinting: false,
     crouching: false,
+    fps: 0,
+    lastHit: null,
+    lastHurt: null,
   };
   muted = false;
   volume = 0.55;
   sensitivity = 1;
+  motionAmount = 0.25;
   private host: HTMLDivElement;
   private map: HTMLCanvasElement;
   private notify: (state: Snapshot) => void;
@@ -290,8 +318,23 @@ export class Arena {
   private held = false;
   private yaw = 0;
   private pitch = -0.035;
-  private feet = 0;
-  private vertical = 0;
+  private motion = createMotion();
+  private previousMotion = { x: 0, z: 16, feet: 0 };
+  private accumulator = 0;
+  private cameraFeet = 0;
+  private bobAmplitude = 0;
+  private sprintBlend = 0;
+  private swayX = 0;
+  private swayY = 0;
+  private lookTime = 0;
+  private hitSerial = 0;
+  private lastSnapshot: Snapshot | null = null;
+  private effects = new CombatEffects();
+  private resolutionQuality = 1;
+  private qualityCooldown = 0;
+  private frameAverage = 1 / 60;
+  private fpsTime = 0;
+  private fpsFrames = 0;
   private eye = 1.72;
   private bob = 0;
   private recoil = 0;
@@ -303,11 +346,10 @@ export class Arena {
   private pathTime = 0;
   private field = new Int16Array(1681);
   private bots: Bot[] = [];
-  private solids: THREE.Mesh[] = [];
-  private particles: Particle[] = [];
+
   private clips: number[] = WEAPONS.map((w) => w.capacity);
   private reserves: number[] = WEAPONS.map((w) => w.reserve);
-  private ray = new THREE.Raycaster();
+
   private audio: AudioContext | null = null;
   private rng = 1;
   private disposed = false;
@@ -330,17 +372,18 @@ export class Arena {
       alpha: false,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+    this.renderer.setPixelRatio(1);
     this.renderer.setClearColor(0xf0eee3);
     this.renderer.autoClear = false;
+    this.renderer.info.autoReset = false;
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.tabIndex = 0;
     this.camera.rotation.order = 'YXZ';
     this.camera.position.set(0, 1.72, 16);
-    this.scene.background = new THREE.Color(0xf0eee3);
-    this.scene.fog = new THREE.Fog(0xf0eee3, 26, 70);
-    this.scene.add(new THREE.HemisphereLight(0xfffbee, 0xc2bdac, 2));
-    const sun = new THREE.DirectionalLight(0xffffff, 2.1);
+    this.scene.background = new THREE.Color(0xe6f0f5);
+    this.scene.fog = new THREE.Fog(0xe6f0f5, 32, 80);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x879fba, 1.5));
+    const sun = new THREE.DirectionalLight(0xfff5de, 1.25);
     sun.position.set(-15, 25, 12);
     this.scene.add(sun);
     this.gunScene.add(new THREE.HemisphereLight(0xffffff, 0xb9b6a4, 2.5));
@@ -349,6 +392,8 @@ export class Arena {
     this.gunScene.add(fill);
     this.gunScene.add(this.gun);
     this.buildWorld();
+    batchSketch(this.scene);
+    this.scene.add(this.effects.root);
     this.buildGun();
     this.spawnBots();
     this.resize();
@@ -367,12 +412,7 @@ export class Arena {
     rough = 0.007,
   ) {
     const group = new THREE.Group(),
-      mat = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 1,
-        metalness: 0,
-        flatShading: true,
-      });
+      mat = new THREE.MeshLambertMaterial({ color, flatShading: true });
     const mesh = new THREE.Mesh(geometry, mat);
     group.add(mesh);
     const edge = new THREE.EdgesGeometry(geometry, 24);
@@ -452,28 +492,21 @@ export class Arena {
   private buildWorld() {
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(110, 110),
-      new THREE.MeshStandardMaterial({ color: 0xeeeadd, roughness: 1 }),
+      new THREE.MeshLambertMaterial({ color: 0xf3e5c8 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.015;
     this.scene.add(ground);
-    this.solids.push(ground);
     const grid = new THREE.GridHelper(86, 43, 0xbcb8a8, 0xcac6b7);
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.32;
     grid.position.y = 0.001;
     this.scene.add(grid);
     for (const o of OBSTACLES) {
-      const color =
-        o.kind === 'crate'
-          ? 0xd9d3bf
-          : o.kind === 'platform' || o.kind === 'step'
-            ? 0xd9d6c5
-            : 0xe4e0d1;
+      const color = obstacleColor(o);
       const group = this.box(o.w, o.h, o.d, color);
       group.position.set(o.x, o.h / 2, o.z);
       this.scene.add(group);
-      this.solids.push(group.children[0] as THREE.Mesh);
       const vertices: number[] = [];
       const count = Math.min(30, Math.floor(o.w * o.h * 1.3));
       for (let j = 0; j < count; j++) {
@@ -533,16 +566,16 @@ export class Arena {
         group.add(rim2);
       }
     }
-    const wallTitle = this.textPlane('SCRAP YARD', 15, 5, '#a49b85', 72);
+    const wallTitle = this.textPlane('SCRAP YARD', 15, 5, '#526d95', 72);
     wallTitle.position.set(-1, 3.15, -20.48);
     this.scene.add(wallTitle);
-    const left = this.textPlane('01', 3.5, 2.4, '#807e6d', 135);
+    const left = this.textPlane('01', 3.5, 2.4, '#376d94', 135);
     left.position.set(-11, 2.5, -7.47);
     this.scene.add(left);
-    const right = this.textPlane('B', 2.8, 2.8, '#a0785e', 145);
+    const right = this.textPlane('B', 2.8, 2.8, '#328570', 145);
     right.position.set(12, 2.8, -6.47);
     this.scene.add(right);
-    const floor = this.textPlane('KEEP MOVING →', 9, 3.5, '#9f9b86', 53);
+    const floor = this.textPlane('KEEP MOVING →', 9, 3.5, '#bd8d40', 53);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(0, 0.018, 9.5);
     this.scene.add(floor);
@@ -567,7 +600,12 @@ export class Arena {
     // Faint skyline beyond the play boundary, drawn with the same pencil edges.
     for (let i = 0; i < 11; i++) {
       const h = 4 + seeded(i) * 8;
-      const b = this.box(4 + seeded(i + 4) * 4, h, 4, 0xe4e1d6);
+      const b = this.box(
+        4 + seeded(i + 4) * 4,
+        h,
+        4,
+        [0xb4cadd, 0xc5bdda, 0xbbd6cb][i % 3],
+      );
       b.position.set(-36 + i * 7, h / 2, -31 - seeded(i + 8) * 6);
       this.scene.add(b);
     }
@@ -583,7 +621,7 @@ export class Arena {
       x: number,
       y: number,
       z: number,
-      color = 0xd5d1c1,
+      color = [0x859fcb, 0xdbbb65, 0xb2a1ce, 0x78aa9c][this.state.weapon],
     ) => {
       const b = this.box(w, h, d, color);
       b.position.set(x, y, z);
@@ -646,6 +684,7 @@ export class Arena {
     const hand = add(0.145, 0.16, 0.17, 0.025, -0.15, 0.03, 0xe6ddc7);
     hand.rotation.x = -0.3;
     this.muzzle = new THREE.Group();
+    this.muzzle.userData.dynamic = true;
     const muzzleZ = index === 0 ? -0.38 : index === 2 ? -1.33 : -1.08;
     for (let i = 0; i < 7; i++) {
       const angle = (i / 7) * Math.PI * 2;
@@ -664,7 +703,9 @@ export class Arena {
     flash.position.z = muzzleZ;
     this.muzzle.add(flash);
     this.muzzle.visible = false;
+    batchSketch(this.muzzle);
     this.gun.add(this.muzzle);
+    batchSketch(this.gun);
     this.gun.position.set(0.39, -0.29, -0.52);
     this.gun.rotation.y = -0.07;
   }
@@ -674,7 +715,7 @@ export class Arena {
         body = this.box(0.58, 0.65, 0.35, orange);
       body.position.y = 1.05;
       group.add(body);
-      const head = this.box(0.48, 0.45, 0.43, 0xe2c5a7);
+      const head = this.box(0.48, 0.45, 0.43, 0xf2d39a);
       head.position.y = 1.67;
       head.rotation.z = (i % 2 ? 1 : -1) * 0.09;
       group.add(head);
@@ -712,7 +753,9 @@ export class Arena {
       );
       const legs: THREE.Group[] = [];
       for (const x of [-0.17, 0.17]) {
-        const leg = this.box(0.17, 0.66, 0.21, 0xbaaa8f);
+        const leg = this.box(0.17, 0.66, 0.21, 0x7f93b5);
+        batchSketch(leg);
+        leg.userData.dynamic = true;
         leg.position.set(x, 0.43, 0);
         group.add(leg);
         legs.push(leg);
@@ -727,11 +770,28 @@ export class Arena {
       const weapon = this.box(0.12, 0.13, 0.63, 0x777d68);
       weapon.position.set(0.27, 1.15, 0.45);
       group.add(weapon);
-      const mark = this.textPlane(`0${i + 1}`, 1.1, 0.55, '#aa7457', 90);
+      const mark = this.textPlane(`0${i + 1}`, 1.1, 0.55, '#a84443', 90);
       mark.position.set(0, 2.3, 0);
       group.add(mark);
       group.userData.bot = i;
-      group.traverse((child) => (child.userData.bot = i));
+      batchSketch(group);
+      const healthBackground = new THREE.Sprite(
+        new THREE.SpriteMaterial({ color: 0x394755 }),
+      );
+      healthBackground.position.set(0, 2.06, 0);
+      healthBackground.scale.set(0.85, 0.105, 1);
+      group.add(healthBackground);
+      const healthBar = new THREE.Sprite(
+        new THREE.SpriteMaterial({ color: 0xf47060 }),
+      );
+      healthBar.position.set(0, 2.06, 0.004);
+      healthBar.scale.set(0.79, 0.064, 1);
+      group.add(healthBar);
+      const surface = (
+        group.children.find(
+          (child) => child.name === 'batched-surfaces',
+        ) as THREE.Mesh
+      ).material as THREE.MeshLambertMaterial;
       this.scene.add(group);
       const spawn = SPAWNS[i + 1];
       group.position.set(spawn.x, 0, spawn.z);
@@ -745,6 +805,9 @@ export class Arena {
         legs,
         target: new THREE.Vector3(spawn.x, 0, spawn.z),
         repath: 0,
+        healthBar,
+        flash: 0,
+        surface,
       });
     }
   }
@@ -757,6 +820,10 @@ export class Arena {
           if (this.state.phase === 'ready' || this.state.phase === 'ended')
             this.reset();
           this.state.phase = this.pausedPhase;
+          this.last = performance.now();
+          this.accumulator = 0;
+          this.lookTime = this.last + 0.12 * 1000;
+          this.error('');
           this.emit();
         } else if (
           this.state.phase === 'running' ||
@@ -773,9 +840,7 @@ export class Arena {
     document.addEventListener(
       'pointerlockerror',
       () => {
-        this.error(
-          '鼠标锁定没有成功。请再次点击进入；如果当前预览限制了鼠标锁定，请在独立浏览器中打开。',
-        );
+        // Promise rejection handles real failures; raw-input fallback may also emit this event.
       },
       options,
     );
@@ -787,12 +852,23 @@ export class Arena {
           this.state.phase !== 'running'
         )
           return;
+        if (performance.now() < this.lookTime) return;
         const zoom = this.state.aiming
           ? this.state.weapon === 2
             ? 0.3
             : 0.65
           : 1;
         this.yaw -= e.movementX * 0.002 * this.sensitivity * zoom;
+        this.swayX = THREE.MathUtils.clamp(
+          this.swayX + e.movementX * 0.00015,
+          -0.025,
+          0.025,
+        );
+        this.swayY = THREE.MathUtils.clamp(
+          this.swayY + e.movementY * 0.00012,
+          -0.018,
+          0.018,
+        );
         this.pitch = THREE.MathUtils.clamp(
           this.pitch - e.movementY * 0.002 * this.sensitivity * zoom,
           -1.35,
@@ -823,19 +899,8 @@ export class Arena {
         if (e.code === 'KeyR') this.reload();
         if (/^Digit[1-4]$/.test(e.code))
           this.selectWeapon(Number(e.code.slice(-1)) - 1);
-        if (
-          e.code === 'Space' &&
-          this.state.phase === 'running' &&
-          this.feet <=
-            floorHeight(
-              this.camera.position.x,
-              this.camera.position.z,
-              this.feet,
-            ) +
-              0.02
-        ) {
-          this.vertical = 6.3;
-          this.sound('jump');
+        if (e.code === 'Space' && this.state.phase === 'running') {
+          this.motion.jumpBuffer = 0.13;
         }
       },
       options,
@@ -910,24 +975,24 @@ export class Arena {
     );
   }
   start() {
-    if (this.disposed) return;
-    if (this.state.phase === 'running' || this.state.phase === 'dead') return;
+    if (
+      this.disposed ||
+      this.state.phase === 'running' ||
+      this.state.phase === 'dead'
+    )
+      return;
     try {
       if (!this.audio) this.audio = new AudioContext();
       void this.audio.resume().catch(() => {});
-      this.renderer.domElement.focus({ preventScroll: true });
-      const request = this.renderer.domElement.requestPointerLock();
-      if (request && typeof request.catch === 'function')
-        void request.catch(() => {
-          this.error(
-            '未能锁定鼠标。请再次点击进入，或在独立浏览器中打开游戏。',
-          );
-        });
     } catch {
-      this.error(
-        '此浏览器不支持鼠标锁定，请使用桌面版 Chrome、Edge 或 Firefox。',
-      );
+      /* Audio availability must not block input. */
     }
+    this.renderer.domElement.focus({ preventScroll: true });
+    enterCombatView(
+      this.renderer.domElement,
+      document.documentElement,
+      this.error,
+    );
   }
   pause() {
     if (this.state.phase === 'running' || this.state.phase === 'dead') {
@@ -960,6 +1025,9 @@ export class Arena {
       hits: 0,
       sprinting: false,
       crouching: false,
+      fps: this.state.fps,
+      lastHit: null,
+      lastHurt: null,
     };
     this.pausedPhase = 'running';
     this.clips = WEAPONS.map((w) => w.capacity);
@@ -967,8 +1035,13 @@ export class Arena {
     this.camera.position.set(0, 1.72, 16);
     this.yaw = 0;
     this.pitch = -0.035;
-    this.feet = 0;
-    this.vertical = 0;
+    this.motion = createMotion(this.camera.position.x, this.camera.position.z);
+    this.previousMotion = { x: this.motion.x, z: this.motion.z, feet: 0 };
+    this.accumulator = 0;
+    this.cameraFeet = 0;
+    this.eye = 1.72;
+    this.sprintBlend = 0;
+    this.bobAmplitude = 0;
     this.immunity = 2.5;
     this.cooldown = 0;
     this.reloadTime = 0;
@@ -984,12 +1057,18 @@ export class Arena {
       bot.group.position.set(p.x, 0, p.z);
       bot.cooldown = 1.5 + i * 0.6;
       bot.repath = 0;
+      bot.healthBar.scale.x = 0.79;
+      bot.flash = 0;
+      bot.surface.emissive.setHex(0x000000);
     });
     this.emit();
   }
   private clearInput() {
     this.keys.clear();
     this.held = false;
+    this.motion.vx = 0;
+    this.motion.vz = 0;
+    this.motion.jumpBuffer = 0;
     this.state.aiming = false;
     this.state.sprinting = false;
     this.state.crouching = false;
@@ -1046,9 +1125,12 @@ export class Arena {
     this.sound('shot');
     this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
     this.camera.updateMatrixWorld(true);
-    this.scene.updateMatrixWorld(true);
     const origin = this.camera.position.clone();
     let didHit = false;
+    const hitTotals = new Map<
+      number,
+      { damage: number; headshot: boolean; killed: boolean }
+    >();
     for (let pellet = 0; pellet < spec.pellets; pellet++) {
       const spread =
         spec.spread *
@@ -1061,16 +1143,7 @@ export class Arena {
       )
         .normalize()
         .applyQuaternion(this.camera.quaternion);
-      this.ray.set(origin, direction);
-      this.ray.far = spec.range;
-      const targets = [
-        ...this.solids,
-        ...this.bots.filter((b) => b.alive).map((b) => b.group),
-      ];
-      const intersections = this.ray
-        .intersectObjects(targets, true)
-        .filter((hit) => hit.object instanceof THREE.Mesh);
-      const impact = intersections[0];
+      const impact = this.castShot(origin, direction, spec.range);
       const end =
         impact?.point || origin.clone().addScaledVector(direction, spec.range);
       if (pellet < 3)
@@ -1085,19 +1158,31 @@ export class Arena {
           end,
           0xd1a56b,
         );
-      if (impact && typeof impact.object.userData.bot === 'number') {
-        const bot = this.bots[impact.object.userData.bot];
+      if (impact && impact.bot !== null) {
+        const bot = this.bots[impact.bot];
         if (bot.alive) {
-          const headshot = impact.point.y - bot.group.position.y > 1.45;
+          const headshot = impact.headshot;
           const damage =
             spec.damage *
             (headshot ? 1.5 : 1) *
             (this.state.weapon === 1
               ? Math.max(0.35, 1 - impact.distance / 35)
               : 1);
-          bot.health -= damage;
+          bot.health = Math.max(0, bot.health - damage);
+          bot.healthBar.scale.x = (0.79 * bot.health) / 100;
+          bot.flash = 0.14;
+          const prior = hitTotals.get(bot.id) || {
+            damage: 0,
+            headshot: false,
+            killed: false,
+          };
+          hitTotals.set(bot.id, {
+            damage: prior.damage + damage,
+            headshot: prior.headshot || headshot,
+            killed: bot.health <= 0,
+          });
           didHit = true;
-          this.hitTime = 0.16;
+          this.hitTime = 0.32;
           this.burst(impact.point, 0xcf8059, 4);
           if (bot.health <= 0) {
             bot.alive = false;
@@ -1120,49 +1205,62 @@ export class Arena {
       }
     }
     if (didHit) {
+      const [id, result] = [...hitTotals.entries()].at(-1)!;
+      this.state.lastHit = {
+        id: ++this.hitSerial,
+        damage: Math.round(result.damage),
+        health: Math.ceil(this.bots[id].health),
+        target: id + 1,
+        headshot: result.headshot,
+        killed: result.killed,
+      };
       this.state.hits++;
       this.sound('hit');
     }
     this.emit();
   }
+  private castShot(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    range: number,
+  ) {
+    let nearest = worldHitDistance(origin, direction, range),
+      target: number | null = null,
+      headshot = false;
+    for (const bot of this.bots) {
+      if (!bot.alive) continue;
+      const p = bot.group.position;
+      for (const head of [false, true]) {
+        const half = head ? 0.25 : 0.35,
+          minY = head ? 1.44 : 0.1,
+          maxY = head ? 1.91 : 1.4;
+        const hit = rayBox(
+          origin,
+          direction,
+          { x: p.x - half, y: p.y + minY, z: p.z - 0.25 },
+          { x: p.x + half, y: p.y + maxY, z: p.z + 0.25 },
+          nearest,
+        );
+        if (hit !== null && hit < nearest) {
+          nearest = hit;
+          target = bot.id;
+          headshot = head;
+        }
+      }
+    }
+    if (nearest >= range) return null;
+    return {
+      point: origin.clone().addScaledVector(direction, nearest),
+      distance: nearest,
+      bot: target,
+      headshot,
+    };
+  }
   private tracer(from: THREE.Vector3, to: THREE.Vector3, color: number) {
-    const object = this.line([from, to], color, 0.8);
-    this.scene.add(object);
-    this.particles.push({
-      object,
-      velocity: new THREE.Vector3(),
-      life: 0.07,
-      max: 0.07,
-    });
+    this.effects.tracer(from, to, color);
   }
   private burst(position: THREE.Vector3, color: number, count: number) {
-    for (let i = 0; i < count; i++) {
-      const object = this.sketch(
-        new THREE.PlaneGeometry(
-          0.04 + Math.random() * 0.1,
-          0.05 + Math.random() * 0.14,
-        ),
-        color,
-        0,
-      );
-      object.position.copy(position);
-      object.rotation.set(
-        Math.random() * 3,
-        Math.random() * 3,
-        Math.random() * 3,
-      );
-      this.scene.add(object);
-      this.particles.push({
-        object,
-        velocity: new THREE.Vector3(
-          (Math.random() - 0.5) * 3,
-          Math.random() * 3,
-          (Math.random() - 0.5) * 3,
-        ),
-        life: 0.4 + Math.random() * 0.4,
-        max: 0.8,
-      });
-    }
+    this.effects.burst(position, color, count);
   }
   private addFeed(text: string) {
     this.state.feed = [
@@ -1179,7 +1277,14 @@ export class Arena {
       gain = ac.createGain();
     gain.connect(ac.destination);
     let duration = 0.12;
-    let loud = 0.035;
+    let loud =
+      type === 'hit'
+        ? 0.14
+        : type === 'kill'
+          ? 0.19
+          : type === 'hurt'
+            ? 0.14
+            : 0.035;
     if (type === 'shot') {
       duration =
         this.state.weapon === 1 ? 0.22 : this.state.weapon === 2 ? 0.3 : 0.13;
@@ -1258,6 +1363,8 @@ export class Arena {
           bot.group.visible = true;
           bot.cooldown = 1.5;
           bot.repath = 0;
+          bot.healthBar.scale.x = 0.79;
+          bot.flash = 0;
         }
         continue;
       }
@@ -1271,9 +1378,8 @@ export class Arena {
         destination = this.camera.position.clone();
       const direction = destination.clone().sub(origin),
         len = direction.length();
-      this.ray.set(origin, direction.normalize());
-      this.ray.far = Math.max(0, len - 0.1);
-      const blocked = this.ray.intersectObjects(this.solids, false).length > 0;
+      direction.normalize();
+      const blocked = worldHitDistance(origin, direction, len) < len - 0.1;
       if (blocked || distance > 9) {
         bot.repath -= dt;
         if (bot.repath <= 0 || pos.distanceTo(bot.target) < 0.35) {
@@ -1320,8 +1426,8 @@ export class Arena {
       } else if (distance < 5) {
         moveBody(
           pos,
-          (-dx / distance) * dt * 1.1,
-          (-dz / distance) * dt * 1.1,
+          (-dx / (distance || 1)) * dt * 1.1,
+          (-dz / (distance || 1)) * dt * 1.1,
           0,
           0.35,
         );
@@ -1358,11 +1464,15 @@ export class Arena {
           this.immunity <= 0 &&
           Math.random() < 0.55 - Math.min(distance, 25) * 0.01
         ) {
-          this.state.health = Math.max(
-            0,
-            this.state.health - (7 + Math.floor(Math.random() * 5)),
-          );
-          this.hurtTime = 0.18;
+          const damage = 7 + Math.floor(Math.random() * 5);
+          this.state.health = Math.max(0, this.state.health - damage);
+          this.state.lastHurt = {
+            id: ++this.hitSerial,
+            damage,
+            angle: this.yaw - Math.atan2(dx, dz),
+            target: bot.id + 1,
+          };
+          this.hurtTime = 0.72;
           this.sound('hurt');
           if (this.state.health <= 0) {
             this.state.deaths++;
@@ -1401,11 +1511,20 @@ export class Arena {
       }
     }
     this.camera.position.set(best.x, 1.72, best.z);
-    this.feet = 0;
-    this.vertical = 0;
+    this.motion = createMotion(this.camera.position.x, this.camera.position.z);
+    this.previousMotion = { x: this.motion.x, z: this.motion.z, feet: 0 };
+    this.accumulator = 0;
+    this.cameraFeet = 0;
+    this.eye = 1.72;
+    this.sprintBlend = 0;
+    this.bobAmplitude = 0;
     this.yaw = Math.atan2(-best.x, -best.z) + Math.PI;
     this.pitch = 0;
     this.state.health = 100;
+    this.state.lastHit = null;
+    this.state.lastHurt = null;
+    this.hurtTime = 0;
+    this.hitTime = 0;
     this.state.phase = 'running';
     this.immunity = 2.5;
     this.state.respawn = 0;
@@ -1423,54 +1542,35 @@ export class Arena {
     this.state.sprinting =
       (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) &&
       this.keys.has('KeyW') &&
+      !this.keys.has('KeyS') &&
       !this.state.aiming &&
       !this.state.crouching &&
-      !this.state.reloading;
-    let forward =
-        (this.keys.has('KeyW') ? 1 : 0) - (this.keys.has('KeyS') ? 1 : 0),
-      right = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
-    const moving = forward !== 0 || right !== 0;
-    const norm = Math.hypot(forward, right) || 1;
-    forward /= norm;
-    right /= norm;
+      !this.state.reloading &&
+      !this.held;
+    const forward =
+        Number(this.keys.has('KeyW')) - Number(this.keys.has('KeyS')),
+      right = Number(this.keys.has('KeyD')) - Number(this.keys.has('KeyA'));
     const speed = this.state.crouching
-      ? 2
+      ? 2.1
       : this.state.sprinting
-        ? 7.4
+        ? 7
         : this.state.aiming
-          ? 2.6
-          : 4.4;
-    const dx =
-        (-Math.sin(this.yaw) * forward + Math.cos(this.yaw) * right) *
-        speed *
-        dt,
-      dz =
-        (-Math.cos(this.yaw) * forward - Math.sin(this.yaw) * right) *
-        speed *
-        dt;
-    moveBody(this.camera.position, dx, dz, this.feet);
-    this.vertical -= 17 * dt;
-    this.feet += this.vertical * dt;
-    const floor = floorHeight(
-      this.camera.position.x,
-      this.camera.position.z,
-      Math.max(0, this.feet),
-    );
-    if (this.feet <= floor) {
-      this.feet = floor;
-      this.vertical = 0;
-    }
-    const targetEye = this.state.crouching ? 1.02 : 1.72;
-    this.eye = THREE.MathUtils.lerp(this.eye, targetEye, Math.min(1, dt * 12));
-    if (moving) this.bob += dt * (this.state.sprinting ? 14 : 9);
-    this.camera.position.y =
-      this.feet + this.eye + (moving ? Math.sin(this.bob) * 0.025 : 0);
-    if (this.held && this.state.weapon === 3) this.fire();
+          ? 2.8
+          : 4.6;
+    this.previousMotion.x = this.motion.x;
+    this.previousMotion.z = this.motion.z;
+    this.previousMotion.feet = this.motion.feet;
+    const grounded = this.motion.grounded;
+    stepMotion(this.motion, { forward, right, yaw: this.yaw, speed }, dt);
+    if (grounded && !this.motion.grounded && this.motion.vy > 0)
+      this.sound('jump');
     if (this.state.reloading) {
       this.reloadTime -= dt;
       if (this.reloadTime <= 0) {
-        const need = WEAPONS[this.state.weapon].capacity - this.state.ammo,
-          amount = Math.min(need, this.state.reserve);
+        const amount = Math.min(
+          WEAPONS[this.state.weapon].capacity - this.state.ammo,
+          this.state.reserve,
+        );
         this.state.ammo += amount;
         this.state.reserve -= amount;
         this.clips[this.state.weapon] = this.state.ammo;
@@ -1483,24 +1583,27 @@ export class Arena {
   private tick = (timestamp: number) => {
     if (this.disposed) return;
     this.frame = requestAnimationFrame(this.tick);
-    const dt = Math.min(0.04, (timestamp - (this.last || timestamp)) / 1000);
+    const rawDt = Math.max(0, (timestamp - (this.last || timestamp)) / 1000);
     this.last = timestamp;
+    const dt = Math.min(rawDt, 0.1),
+      active = this.state.phase === 'running' || this.state.phase === 'dead';
     this.elapsed += dt;
-    const active =
-      this.state.phase === 'running' || this.state.phase === 'dead';
     if (active) {
-      this.state.time = Math.max(0, this.state.time - dt);
-      this.cooldown = Math.max(0, this.cooldown - dt);
+      this.state.time = Math.max(0, this.state.time - rawDt);
       this.immunity -= dt;
       this.hitTime = Math.max(0, this.hitTime - dt);
       this.hurtTime = Math.max(0, this.hurtTime - dt);
       this.flashTime = Math.max(0, this.flashTime - dt);
-      if (this.state.phase === 'running') this.updatePlayer(dt);
-      else {
+      this.accumulator = Math.min(this.accumulator + dt, 0.1);
+      while (this.accumulator >= PHYSICS_STEP) {
+        this.cooldown = Math.max(0, this.cooldown - PHYSICS_STEP);
+        if (this.state.phase === 'running') this.updatePlayer(PHYSICS_STEP);
+        this.accumulator -= PHYSICS_STEP;
+      }
+      if (this.state.phase === 'dead') {
         this.state.respawn -= dt;
         if (this.state.respawn <= 0) this.respawnPlayer();
       }
-      this.updateBots(dt);
       if (this.state.time <= 0) {
         this.state.phase = 'ended';
         this.pausedPhase = 'running';
@@ -1509,82 +1612,151 @@ export class Arena {
         this.emit();
       }
     }
-    this.recoil = THREE.MathUtils.lerp(this.recoil, 0, dt * 13);
+    const alpha = this.accumulator / PHYSICS_STEP;
+    const speed = Math.hypot(this.motion.vx, this.motion.vz);
+    this.eye = damp(this.eye, this.state.crouching ? 1.04 : 1.72, 14, dt);
+    this.sprintBlend = damp(
+      this.sprintBlend,
+      this.state.sprinting ? 1 : 0,
+      7,
+      dt,
+    );
+    this.bobAmplitude = damp(
+      this.bobAmplitude,
+      active && this.motion.grounded ? Math.min(1, speed / 4.6) : 0,
+      12,
+      dt,
+    );
+    this.bob += speed * dt * 2;
+    const foot = THREE.MathUtils.lerp(
+      this.previousMotion.feet,
+      this.motion.feet,
+      alpha,
+    );
+    // Smooth stair steps only. Jump height follows the interpolated simulation directly.
+    this.cameraFeet = this.motion.grounded
+      ? damp(this.cameraFeet, foot, 28, dt)
+      : foot;
+    this.camera.position.set(
+      THREE.MathUtils.lerp(this.previousMotion.x, this.motion.x, alpha),
+      this.cameraFeet +
+        this.eye +
+        Math.sin(this.bob) * 0.012 * this.bobAmplitude * this.motionAmount -
+        this.motion.landing * this.motionAmount,
+      THREE.MathUtils.lerp(this.previousMotion.z, this.motion.z, alpha),
+    );
+    this.recoil = damp(this.recoil, 0, 15, dt);
+    // Mouse rotation is applied immediately, without camera smoothing or roll.
     this.camera.rotation.set(
-      this.pitch + this.recoil * 0.16,
+      this.pitch + this.recoil * 0.07,
       this.yaw,
       0,
       'YXZ',
     );
-    const targetFov = this.state.aiming
-      ? WEAPONS[this.state.weapon].zoom
-      : this.state.sprinting
-        ? 83
-        : 76;
-    this.camera.fov = THREE.MathUtils.lerp(
-      this.camera.fov,
-      targetFov,
-      Math.min(1, dt * 14),
-    );
-    this.camera.updateProjectionMatrix();
+    const zoom = this.state.aiming ? [1.5, 1.25, 4, 1.6][this.state.weapon] : 1;
+    const targetFov = viewFov(this.camera.aspect, zoom, this.sprintBlend),
+      fov = damp(this.camera.fov, targetFov, 12, dt);
+    if (Math.abs(fov - this.camera.fov) > 0.001) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+    if (active) {
+      this.updateBots(dt);
+      if (this.held && this.state.weapon === 3) this.fire();
+      this.effects.update(dt);
+    }
+    for (const bot of this.bots) {
+      bot.flash = Math.max(0, bot.flash - dt);
+      bot.surface.emissive.setHex(bot.flash > 0 ? 0xff4736 : 0x000000);
+      bot.surface.emissiveIntensity = bot.flash > 0 ? 0.65 : 0;
+    }
     this.gun.visible =
       this.state.phase !== 'dead' &&
       !(this.state.aiming && this.state.weapon === 2);
-    const aim = this.state.aiming;
-    const moving =
-      this.keys.has('KeyW') ||
-      this.keys.has('KeyA') ||
-      this.keys.has('KeyS') ||
-      this.keys.has('KeyD');
-    const targetX = aim ? 0 : 0.39,
-      targetY = aim ? -0.135 : -0.29;
-    this.gun.position.x =
-      THREE.MathUtils.lerp(this.gun.position.x, targetX, dt * 16) +
-      (moving && !aim ? Math.sin(this.bob) * 0.0009 : 0);
-    this.gun.position.y =
-      THREE.MathUtils.lerp(this.gun.position.y, targetY, dt * 16) -
-      (this.state.reloading
+    const aim = this.state.aiming,
+      reload = this.state.reloading
         ? Math.sin(
             Math.min(1, this.reloadTime / WEAPONS[this.state.weapon].reload) *
               Math.PI,
-          ) * 0.3
-        : 0) *
-        dt *
-        10;
-    this.gun.position.z = -0.52 + this.recoil;
-    this.gun.rotation.x = this.recoil + (this.state.sprinting ? -0.27 : 0);
-    this.gun.rotation.y = aim ? 0 : -0.07;
-    this.gun.rotation.z = this.state.reloading ? -0.35 : 0;
+          )
+        : 0;
+    this.swayX = damp(this.swayX, 0, 14, dt);
+    this.swayY = damp(this.swayY, 0, 14, dt);
+    const gunBob =
+      Math.sin(this.bob) * 0.006 * this.bobAmplitude * (aim ? 0.15 : 1);
+    this.gun.position.x = damp(
+      this.gun.position.x,
+      (aim ? 0 : 0.37) - this.swayX + gunBob,
+      18,
+      dt,
+    );
+    this.gun.position.y = damp(
+      this.gun.position.y,
+      (aim ? -0.135 : -0.28) -
+        this.sprintBlend * 0.035 -
+        reload * 0.27 +
+        gunBob * 0.7 +
+        this.swayY,
+      18,
+      dt,
+    );
+    this.gun.position.z = damp(
+      this.gun.position.z,
+      -0.52 + this.recoil,
+      22,
+      dt,
+    );
+    this.gun.rotation.x = damp(
+      this.gun.rotation.x,
+      this.recoil - this.sprintBlend * 0.1,
+      16,
+      dt,
+    );
+    this.gun.rotation.y = damp(this.gun.rotation.y, aim ? 0 : -0.06, 16, dt);
+    this.gun.rotation.z = damp(
+      this.gun.rotation.z,
+      -reload * 0.3 - this.sprintBlend * 0.045,
+      14,
+      dt,
+    );
     this.muzzle.visible = this.flashTime > 0 && active;
-    if (active || this.state.phase === 'ready') {
-      for (let i = this.particles.length - 1; i >= 0; i--) {
-        const p = this.particles[i];
-        p.life -= dt;
-        if (p.life <= 0) {
-          this.scene.remove(p.object);
-          this.disposeObject(p.object);
-          this.particles.splice(i, 1);
-          continue;
-        }
-        p.object.position.addScaledVector(p.velocity, dt);
-        if (p.max > 0.1) {
-          p.velocity.y -= 5 * dt;
-          p.object.rotation.x += dt * 4;
-          p.object.rotation.z += dt * 3;
-        }
-      }
-    }
+    this.renderer.info.reset();
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
     this.renderer.render(this.gunScene, this.gunCamera);
+    if (active && rawDt > 0) {
+      this.frameAverage = damp(this.frameAverage, Math.min(rawDt, 0.1), 1, dt);
+      this.fpsTime += rawDt;
+      this.fpsFrames++;
+      this.qualityCooldown -= dt;
+      if (this.fpsTime >= 1) {
+        this.state.fps = Math.round(this.fpsFrames / this.fpsTime);
+        this.fpsTime = 0;
+        this.fpsFrames = 0;
+      }
+      if (this.qualityCooldown <= 0) {
+        const next =
+          this.frameAverage > 0.023
+            ? Math.max(0.65, this.resolutionQuality - 0.1)
+            : this.frameAverage < 0.0175
+              ? Math.min(1, this.resolutionQuality + 0.05)
+              : this.resolutionQuality;
+        if (next !== this.resolutionQuality) {
+          this.resolutionQuality = next;
+          this.resize();
+        }
+        this.qualityCooldown = this.frameAverage > 0.023 ? 3 : 8;
+      }
+    }
     this.publish += dt;
-    if (this.publish > 0.08) {
+    if (this.publish > 0.1) {
       this.publish = 0;
       this.drawMap();
-      if (active) this.emit();
+      this.emit();
     }
   };
+
   private drawMap() {
     const ctx = this.map.getContext('2d');
     if (!ctx) return;
@@ -1608,7 +1780,7 @@ export class Arena {
       ctx.stroke();
     }
     for (const o of OBSTACLES) {
-      ctx.fillStyle = o.kind === 'crate' ? '#d4cdbb' : '#ded9ca';
+      ctx.fillStyle = '#' + obstacleColor(o).toString(16).padStart(6, '0');
       ctx.strokeStyle = '#88816d';
       ctx.lineWidth = 1.6;
       const x = (o.x - o.w / 2 + 22.5) * sx,
@@ -1659,8 +1831,16 @@ export class Arena {
   private resize() {
     const w = this.host.clientWidth || 1000,
       h = this.host.clientHeight || 600;
+    this.renderer.setPixelRatio(
+      renderPixelRatio(w, h, devicePixelRatio, this.resolutionQuality),
+    );
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
+    this.camera.fov = viewFov(
+      w / h,
+      this.state.aiming ? [1.5, 1.25, 4, 1.6][this.state.weapon] : 1,
+      this.sprintBlend,
+    );
     this.camera.updateProjectionMatrix();
     this.gunCamera.aspect = w / h;
     this.gunCamera.updateProjectionMatrix();
@@ -1669,14 +1849,43 @@ export class Arena {
   private emit() {
     this.state.hit = this.hitTime > 0;
     this.state.hurt = this.hurtTime > 0;
-    this.notify({ ...this.state, feed: [...this.state.feed] });
+    const next = {
+      ...this.state,
+      time: Math.ceil(this.state.time),
+      respawn: Math.ceil(this.state.respawn),
+    };
+    if (
+      this.lastSnapshot &&
+      Object.keys(next).every(
+        (key) =>
+          next[key as keyof Snapshot] ===
+          this.lastSnapshot![key as keyof Snapshot],
+      )
+    )
+      return;
+    this.lastSnapshot = next;
+    this.notify({ ...next, feed: [...next.feed] });
   }
   getSnapshot() {
     return { ...this.state, feed: [...this.state.feed] };
   }
+  getDiagnostics() {
+    return {
+      fps: this.state.fps,
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      pixelRatio: this.renderer.getPixelRatio(),
+      geometries: this.renderer.info.memory.geometries,
+    };
+  }
+
   private disposeObject(object: THREE.Object3D) {
     object.traverse((child) => {
-      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      if (
+        child instanceof THREE.Mesh ||
+        child instanceof THREE.Line ||
+        child instanceof THREE.Sprite
+      ) {
         child.geometry?.dispose();
         const materials = Array.isArray(child.material)
           ? child.material

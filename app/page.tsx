@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   Crosshair,
@@ -43,6 +43,9 @@ const initial: Snapshot = {
   hits: 0,
   sprinting: false,
   crouching: false,
+  fps: 0,
+  lastHit: null,
+  lastHurt: null,
 };
 const controls = [
   ['W A S D', '移动'],
@@ -56,7 +59,11 @@ const controls = [
   ['Space', '跳跃'],
   ['Esc', '暂停'],
 ];
-function WeaponDrawing({ index }: { index: number }) {
+const WeaponDrawing = memo(function WeaponDrawing({
+  index,
+}: {
+  index: number;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     if (canvas.current) drawWeapon(canvas.current, index);
@@ -70,7 +77,7 @@ function WeaponDrawing({ index }: { index: number }) {
       aria-hidden="true"
     />
   );
-}
+});
 
 export default function Home() {
   const scene = useRef<HTMLDivElement>(null),
@@ -84,7 +91,9 @@ export default function Home() {
     [volume, setVolume] = useState(55),
     [error, setError] = useState(''),
     [loaded, setLoaded] = useState(false),
-    [fullscreen, setFullscreen] = useState(false);
+    [fullscreen, setFullscreen] = useState(false),
+    [immersive, setImmersive] = useState(false),
+    [motionAmount, setMotionAmount] = useState(25);
   useEffect(() => {
     if (!scene.current || !minimap.current) return;
     try {
@@ -113,8 +122,9 @@ export default function Home() {
       arena.current.muted = muted;
       arena.current.volume = volume / 100;
       arena.current.sensitivity = sensitivity / 45;
+      arena.current.motionAmount = motionAmount / 100;
     }
-  }, [muted, volume, sensitivity]);
+  }, [muted, volume, sensitivity, motionAmount]);
   useEffect(() => {
     const listener = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', listener);
@@ -122,12 +132,21 @@ export default function Home() {
   }, []);
   const launch = () => {
       setError('');
+      setImmersive(true);
       arena.current?.start();
     },
     overlay = ['ready', 'paused', 'ended'].includes(game.phase),
     weapon = WEAPONS[game.weapon];
+  const leaveCombat = () => {
+    arena.current?.pause();
+    setImmersive(false);
+    if (document.fullscreenElement)
+      void document.exitFullscreen().catch(() => {});
+  };
   return (
-    <main className={`app ${fullscreen ? 'is-fullscreen' : ''}`}>
+    <main
+      className={`app ${fullscreen ? 'is-fullscreen' : ''} ${immersive ? 'play-mode' : ''}`}
+    >
       <header className="site-header">
         <a href="/" className="brand" aria-label="Paperstrike 首页">
           <span className="brand-icon">
@@ -144,7 +163,7 @@ export default function Home() {
         <div className="header-actions">
           <span className="prototype-tag">
             <span />
-            可玩原型 v0.1
+            可玩原型 v0.2
           </span>
           <button
             className="icon-button"
@@ -187,7 +206,7 @@ export default function Home() {
           </button>
         </div>
         <div
-          className={`game-frame ${game.aiming && game.weapon === 2 ? 'scoped' : ''} ${game.hurt ? 'hurt' : ''}`}
+          className={`game-frame ${game.aiming && game.weapon === 2 ? 'scoped' : ''} ${game.hurt ? 'hurt' : ''} ${game.health <= 30 && game.phase === 'running' ? 'critical-health' : ''}`}
           id="game-frame"
         >
           <div ref={scene} className="scene" aria-label="三维手绘射击竞技场" />
@@ -261,7 +280,7 @@ export default function Home() {
           {!overlay && game.phase !== 'dead' && (
             <>
               <div
-                className={`crosshair ${game.hit ? 'confirmed' : ''} ${game.aiming ? 'ads' : ''}`}
+                className={`crosshair ${game.hit ? 'confirmed' : ''} ${game.hit && game.lastHit?.killed ? 'kill-confirmed' : ''} ${game.aiming ? 'ads' : ''}`}
               >
                 <i />
                 <i />
@@ -277,6 +296,58 @@ export default function Home() {
                     <span>× 4.0</span>
                   </div>
                 </div>
+              )}
+              {game.lastHit && (
+                <div
+                  key={game.lastHit.id}
+                  className={`hit-feedback ${game.lastHit.killed ? 'is-kill' : ''}`}
+                >
+                  <strong className="damage-number">
+                    {game.lastHit.killed ? '✕ ' : ''}−{game.lastHit.damage}
+                  </strong>
+                  <span>
+                    {game.lastHit.killed
+                      ? '击杀确认'
+                      : game.lastHit.headshot
+                        ? '爆头命中'
+                        : '命中'}
+                  </span>
+                  <div className="target-health">
+                    <span>
+                      涂鸦 {String(game.lastHit.target).padStart(2, '0')}
+                      <b>{game.lastHit.health} / 100</b>
+                    </span>
+                    <i>
+                      <b style={{ width: game.lastHit.health + '%' }} />
+                    </i>
+                  </div>
+                </div>
+              )}
+              {game.hurt && game.lastHurt && (
+                <div
+                  key={game.lastHurt.id}
+                  className="received-hit"
+                  aria-live="polite"
+                >
+                  <div
+                    className="damage-direction"
+                    style={{
+                      transform: `translate(-50%,-50%) rotate(${game.lastHurt.angle}rad)`,
+                    }}
+                  >
+                    <span>▼</span>
+                  </div>
+                  <p>
+                    −{game.lastHurt.damage} HP{' '}
+                    <span>
+                      受到 涂鸦 {String(game.lastHurt.target).padStart(2, '0')}{' '}
+                      的攻击
+                    </span>
+                  </p>
+                </div>
+              )}
+              {game.health <= 30 && (
+                <div className="critical-notice">生命值过低 · 寻找掩体</div>
               )}
               <div className="movement-indicator">
                 {game.sprinting ? '↑ 冲刺中' : game.crouching ? '↓ 蹲伏中' : ''}
@@ -346,14 +417,19 @@ export default function Home() {
                       ? '继续战斗'
                       : game.phase === 'ended'
                         ? '再画一局'
-                        : '进入战场'
+                        : '全屏进入战场'
                     : '正在铺开画纸…'}
                   <span>↗</span>
                 </button>
                 <div className="start-hint">
                   <Mouse size={14} />
-                  点击后锁定鼠标<span>·</span>Esc 暂停
+                  全屏 · 锁定鼠标<span>·</span>Esc 暂停
                 </div>
+                {immersive && (
+                  <button className="leave-combat" onClick={leaveCombat}>
+                    返回武器台 ↙
+                  </button>
+                )}
               </div>
               <div className="scribble-note">
                 <span>
@@ -372,6 +448,9 @@ export default function Home() {
               <button className="text-button" onClick={launch}>
                 重新尝试 ↗
               </button>
+              <button className="leave-combat" onClick={leaveCombat}>
+                返回武器台
+              </button>
             </div>
           )}
           {game.phase === 'dead' && (
@@ -389,10 +468,16 @@ export default function Home() {
                   {Math.ceil(game.health)} <small>/ 100</small>
                 </span>
                 <div className="health-track">
+                  <b
+                    className="health-trail"
+                    style={{ width: game.health + '%' }}
+                  />
                   <span style={{ width: `${game.health}%` }} />
                 </div>
               </div>
-              <span className="health-caption">保持完整</span>
+              <span className="health-caption">
+                {game.health <= 30 ? '寻找掩体' : '生命值'}
+              </span>
             </div>
             <div className="location-label">
               <span className="handwritten">The Scrapyard</span>
@@ -422,18 +507,37 @@ export default function Home() {
           </div>
           <button
             className="fullscreen-button"
-            aria-label={fullscreen ? '退出全屏' : '全屏竞技场'}
-            onClick={async () => {
-              try {
-                if (document.fullscreenElement) await document.exitFullscreen();
-                else await document.querySelector('.app')?.requestFullscreen();
-              } catch {
-                setError('当前窗口不支持全屏，可在独立浏览器中打开游戏。');
+            aria-label={fullscreen || immersive ? '返回窗口' : '全屏竞技场'}
+            onClick={() => {
+              if (immersive || fullscreen) leaveCombat();
+              else {
+                setImmersive(true);
+                if (document.fullscreenEnabled)
+                  void document.documentElement
+                    .requestFullscreen({ navigationUI: 'hide' })
+                    .catch(() => {});
               }
             }}
           >
             <Maximize2 size={16} />
           </button>
+          <div className="combat-loadout">
+            {WEAPONS.map((item, index) => (
+              <button
+                key={item.name}
+                className={game.weapon === index ? 'active' : ''}
+                onClick={() => arena.current?.selectWeapon(index)}
+                aria-label={`装备${item.name}`}
+              >
+                <kbd>{index + 1}</kbd>
+                {item.name}
+              </button>
+            ))}
+          </div>
+          <span className="performance-readout">
+            {game.fps > 0 ? `${game.fps} FPS` : 'PAPERSTRIKE'}
+            <span>自适应画质</span>
+          </span>
           {game.phase === 'running' && (
             <button
               className="pause-button"
@@ -567,6 +671,20 @@ export default function Home() {
               value={[volume]}
               onValueChange={(value) =>
                 setVolume(Array.isArray(value) ? value[0] : value)
+              }
+            />
+          </div>
+          <div className="setting-row">
+            <label>
+              镜头动作幅度<b>{motionAmount}%</b>
+            </label>
+            <Slider
+              aria-label="镜头动作幅度"
+              min={0}
+              max={100}
+              value={[motionAmount]}
+              onValueChange={(value) =>
+                setMotionAmount(Array.isArray(value) ? value[0] : value)
               }
             />
           </div>

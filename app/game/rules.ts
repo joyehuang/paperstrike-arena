@@ -169,3 +169,137 @@ export function navigationField(x: number, z: number) {
   }
   return field;
 }
+
+export const PHYSICS_STEP = 1 / 120;
+export const damp = (from: number, to: number, rate: number, dt: number) =>
+  to + (from - to) * Math.exp(-rate * dt);
+export type Motion = {
+  x: number;
+  z: number;
+  feet: number;
+  vx: number;
+  vz: number;
+  vy: number;
+  grounded: boolean;
+  coyote: number;
+  jumpBuffer: number;
+  landing: number;
+};
+export const createMotion = (x = 0, z = 16): Motion => ({
+  x,
+  z,
+  feet: 0,
+  vx: 0,
+  vz: 0,
+  vy: 0,
+  grounded: true,
+  coyote: 0.08,
+  jumpBuffer: 0,
+  landing: 0,
+});
+export function stepMotion(
+  body: Motion,
+  input: { forward: number; right: number; yaw: number; speed: number },
+  dt: number,
+) {
+  const norm = Math.hypot(input.forward, input.right) || 1,
+    f = input.forward / norm,
+    r = input.right / norm;
+  const tx = (-Math.sin(input.yaw) * f + Math.cos(input.yaw) * r) * input.speed,
+    tz = (-Math.cos(input.yaw) * f - Math.sin(input.yaw) * r) * input.speed;
+  const rate = body.grounded ? 18 : 4.5;
+  body.vx = damp(body.vx, tx, rate, dt);
+  body.vz = damp(body.vz, tz, rate, dt);
+  body.coyote = body.grounded ? 0.08 : Math.max(0, body.coyote - dt);
+  body.jumpBuffer = Math.max(0, body.jumpBuffer - dt);
+  if (body.jumpBuffer > 0 && body.coyote > 0) {
+    body.vy = 7.25;
+    body.grounded = false;
+    body.jumpBuffer = 0;
+    body.coyote = 0;
+  }
+  const previousFeet = body.feet;
+  moveBody(body, body.vx * dt, body.vz * dt, body.feet);
+  const floor = floorHeight(body.x, body.z, previousFeet);
+  if (body.grounded && floor < previousFeet - 0.05) body.grounded = false;
+  if (!body.grounded) {
+    body.feet += body.vy * dt - 0.5 * 23 * dt * dt;
+    body.vy -= 23 * dt;
+  }
+  if (body.vy <= 0 && body.feet <= floor) {
+    if (!body.grounded)
+      body.landing = Math.min(0.055, Math.abs(body.vy) * 0.004);
+    body.feet = floor;
+    body.vy = 0;
+    body.grounded = true;
+  } else if (body.grounded) body.feet = floor;
+  body.landing = damp(body.landing, 0, 13, dt);
+}
+
+export function viewFov(aspect: number, zoom = 1, sprint = 0) {
+  const horizontal = ((98 + sprint * 3) * Math.PI) / 180;
+  return (
+    (2 *
+      Math.atan(Math.tan(horizontal / 2) / Math.max(1, aspect) / zoom) *
+      180) /
+    Math.PI
+  );
+}
+export const obstacleColor = (o: Obstacle) =>
+  o.kind === 'crate'
+    ? o.x < 0
+      ? 0xeac35f
+      : 0x82b899
+    : o.kind === 'platform' || o.kind === 'step'
+      ? 0xada3d3
+      : Math.abs(o.x) > 20 || Math.abs(o.z) > 20
+        ? 0xb6d2dc
+        : o.x < 0
+          ? 0x8cbdd4
+          : 0x97c7b5;
+
+/** Slab ray intersection, shared by bullets and AI sight. Decorative outlines,
+ * text and health bars never participate in damage detection. */
+export function rayBox(
+  origin: { x: number; y: number; z: number },
+  direction: { x: number; y: number; z: number },
+  min: { x: number; y: number; z: number },
+  max: { x: number; y: number; z: number },
+  range: number,
+) {
+  let near = 0,
+    far = range;
+  for (const axis of ['x', 'y', 'z'] as const) {
+    if (Math.abs(direction[axis]) < 1e-8) {
+      if (origin[axis] < min[axis] || origin[axis] > max[axis]) return null;
+      continue;
+    }
+    let a = (min[axis] - origin[axis]) / direction[axis],
+      b = (max[axis] - origin[axis]) / direction[axis];
+    if (a > b) [a, b] = [b, a];
+    near = Math.max(near, a);
+    far = Math.min(far, b);
+    if (near > far) return null;
+  }
+  return near <= range && far >= 0 ? near : null;
+}
+const WORLD_BOUNDS = OBSTACLES.map((o) => ({
+  min: { x: o.x - o.w / 2, y: 0, z: o.z - o.d / 2 },
+  max: { x: o.x + o.w / 2, y: o.h, z: o.z + o.d / 2 },
+}));
+export function worldHitDistance(
+  origin: { x: number; y: number; z: number },
+  direction: { x: number; y: number; z: number },
+  range: number,
+) {
+  let nearest = range;
+  for (const box of WORLD_BOUNDS) {
+    const hit = rayBox(origin, direction, box.min, box.max, nearest);
+    if (hit !== null) nearest = Math.min(nearest, hit);
+  }
+  if (direction.y < 0) {
+    const floor = -origin.y / direction.y;
+    if (floor >= 0) nearest = Math.min(nearest, floor);
+  }
+  return nearest;
+}
