@@ -116,6 +116,36 @@ function drawCount(root) {
   return count;
 }
 
+test('every weapon automatically reloads immediately after its last real shot', () => {
+  for (let w = 0; w < 4; w++) {
+    const arena = fixture();
+    arena.selectWeapon(w);
+    arena.cooldown = 0;
+    arena.state.ammo = arena.clips[w] = 1;
+    arena.state.aiming = true;
+    arena.fire();
+    assert.equal(arena.state.ammo, 0);
+    assert.equal(arena.state.shots, 1);
+    assert.equal(arena.state.reloading, true);
+    assert.equal(arena.state.aiming, false);
+    assert.equal(arena.reloadTime, WEAPONS[w].reload);
+    arena.fire();
+    assert.equal(arena.state.shots, 1, 'reload cannot create a phantom shot');
+    arena.updatePlayer(WEAPONS[w].reload);
+    assert.equal(arena.state.ammo, WEAPONS[w].capacity);
+    arena.state.ammo = arena.clips[w] = 1;
+    arena.state.reserve = arena.reserves[w] = 0;
+    arena.cooldown = 0;
+    arena.fire();
+    assert.equal(
+      arena.state.reloading,
+      false,
+      'no reserve cannot manufacture ammunition',
+    );
+    assert.equal(arena.state.ammo, 0);
+  }
+});
+
 test('training targets cannot damage players and reuse static and moving target slots', () => {
   const arena = fixture(LEVELS.findIndex((l) => l.practice));
   const start = arena.bots.map((b) => b.group.position.clone());

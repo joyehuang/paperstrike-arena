@@ -1548,6 +1548,11 @@ export class Arena {
     }
     if (!this.level.practice && this.state.kills >= this.level.goal)
       this.finish(true);
+    if (this.state.ammo === 0) {
+      if (this.level.practice && this.trainingUnlimited)
+        this.state.reserve = this.reserves[this.state.weapon] = spec.reserve;
+      this.reload();
+    }
     this.emit();
   }
   private castShot(
