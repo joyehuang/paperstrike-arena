@@ -3,6 +3,7 @@ import { OBSTACLES, SPAWNS, type Obstacle } from './rules';
 export type PickupKind = 'health' | 'ammo' | 'shield';
 export type PickupSpot = { x: number; z: number; kind: PickupKind };
 export type Level = {
+  practice?: boolean;
   name: string;
   english: string;
   description: string;
@@ -164,3 +165,30 @@ export const LEVELS: Level[] = [
     ],
   },
 ];
+
+LEVELS.push({
+  practice: true,
+  name: '练习画室',
+  english: 'THE PRACTICE ROOM',
+  description:
+    '三座静止靶、两座移动靶。自由练枪，没有时间限制，也不会受到攻击。',
+  tactic: '自由练习 · 静止 / 移动靶',
+  color: '#78bba3',
+  sky: 0xdceee8,
+  ground: 0xf0ecd9,
+  accent: 0x94c9b6,
+  goal: 0,
+  enemies: 5,
+  duration: 0,
+  music: 'getaway',
+  obstacles: boundary(),
+  spawns: [
+    { x: 0, z: 16 },
+    { x: -12, z: 6 },
+    { x: -6, z: 1 },
+    { x: 0, z: -4 },
+    { x: 6, z: -9 },
+    { x: 12, z: -14 },
+  ],
+  pickups: [],
+});

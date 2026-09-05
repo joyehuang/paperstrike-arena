@@ -330,6 +330,10 @@ export class Arena {
   musicVolume = 0.28;
   sensitivity = 1;
   motionAmount = 0.25;
+  touchMode = false;
+  trainingUnlimited = true;
+  private touchForward = 0;
+  private touchRight = 0;
   private host: HTMLDivElement;
   private map: HTMLCanvasElement;
   private notify: (state: Snapshot) => void;
@@ -392,8 +396,9 @@ export class Arena {
     this.map = map;
     this.notify = notify;
     this.error = error;
+    this.touchMode = matchMedia('(pointer: coarse)').matches;
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: !this.touchMode,
       alpha: false,
       powerPreference: 'high-performance',
     });
@@ -530,6 +535,14 @@ export class Arena {
     (grid.material as THREE.Material).opacity = 0.32;
     grid.position.y = 0.001;
     this.scene.add(grid);
+    if (this.level.practice) {
+      for (const distance of [10, 15, 20, 25, 30]) {
+        const marker = this.textPlane(`${distance} m`, 3, 1.2, '#378575', 90);
+        marker.rotation.x = -Math.PI / 2;
+        marker.position.set(-17, 0.025, 16 - distance);
+        this.scene.add(marker);
+      }
+    }
     for (const o of this.level.obstacles) {
       const color =
         o.kind === 'wall' && this.state.level > 0
@@ -606,25 +619,33 @@ export class Arena {
     );
     wallTitle.position.set(0, this.state.level === 2 ? 1.6 : 3.15, -20.48);
     this.scene.add(wallTitle);
-    const markerA = this.level.obstacles[4];
-    const markerB = this.level.obstacles[5];
-    const left = this.textPlane('A', 2.5, 2, '#376d94', 135);
-    left.position.set(
-      markerA.x,
-      markerA.h * 0.6,
-      markerA.z + markerA.d / 2 + 0.03,
+    if (this.level.obstacles.length > 5) {
+      const markerA = this.level.obstacles[4];
+      const markerB = this.level.obstacles[5];
+      const left = this.textPlane('A', 2.5, 2, '#376d94', 135);
+      left.position.set(
+        markerA.x,
+        markerA.h * 0.6,
+        markerA.z + markerA.d / 2 + 0.03,
+      );
+      this.scene.add(left);
+      const right = this.textPlane('B', 2.8, 2.8, '#328570', 145);
+      right.position.set(
+        markerB.x,
+        markerB.h * 0.6,
+        markerB.z + markerB.d / 2 + 0.03,
+      );
+      this.scene.add(right);
+    }
+    const floor = this.textPlane(
+      this.level.practice ? 'FIRING LINE' : 'KEEP MOVING →',
+      9,
+      3.5,
+      '#bd8d40',
+      53,
     );
-    this.scene.add(left);
-    const right = this.textPlane('B', 2.8, 2.8, '#328570', 145);
-    right.position.set(
-      markerB.x,
-      markerB.h * 0.6,
-      markerB.z + markerB.d / 2 + 0.03,
-    );
-    this.scene.add(right);
-    const floor = this.textPlane('KEEP MOVING →', 9, 3.5, '#bd8d40', 53);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0.018, 9.5);
+    floor.position.set(0, 0.018, this.level.practice ? 16 : 9.5);
     this.scene.add(floor);
     const floor2 = this.textPlane('×', 3, 3, '#bc997c', 140);
     floor2.rotation.x = -Math.PI / 2;
@@ -902,6 +923,7 @@ export class Arena {
     document.addEventListener(
       'pointerlockchange',
       () => {
+        if (this.touchMode) return;
         if (document.pointerLockElement === this.renderer.domElement) {
           if (this.state.phase === 'ready' || this.state.phase === 'ended')
             this.reset();
@@ -1044,6 +1066,13 @@ export class Arena {
     );
     window.addEventListener('blur', () => this.pause(), options);
     document.addEventListener(
+      'fullscreenchange',
+      () => {
+        if (this.touchMode && !document.fullscreenElement) this.pause();
+      },
+      options,
+    );
+    document.addEventListener(
       'visibilitychange',
       () => {
         if (document.hidden) this.pause();
@@ -1069,6 +1098,18 @@ export class Arena {
       return;
     this.audioEngine.unlock(this.level.music);
     this.renderer.domElement.focus({ preventScroll: true });
+    if (this.touchMode) {
+      if (this.state.phase === 'ready' || this.state.phase === 'ended')
+        this.reset();
+      this.state.phase = this.pausedPhase;
+      this.last = performance.now();
+      this.accumulator = 0;
+      this.error('');
+      if (document.fullscreenEnabled && !document.fullscreenElement)
+        void document.documentElement.requestFullscreen().catch(() => {});
+      this.emit();
+      return;
+    }
     enterCombatView(
       this.renderer.domElement,
       document.documentElement,
@@ -1304,6 +1345,7 @@ export class Arena {
     }
   }
   private clearInput() {
+    this.touchForward = this.touchRight = 0;
     this.keys.clear();
     this.held = false;
     this.motion.vx = 0;
@@ -1326,6 +1368,48 @@ export class Arena {
     this.cooldown = 0.22;
     this.held = false;
     this.buildGun();
+    this.emit();
+    return true;
+  }
+  touchMove(forward: number, right: number) {
+    if (!this.touchMode || this.state.phase !== 'running') return;
+    this.touchForward = Math.max(-1, Math.min(1, forward));
+    this.touchRight = Math.max(-1, Math.min(1, right));
+  }
+  touchLook(dx: number, dy: number) {
+    if (!this.touchMode || this.state.phase !== 'running') return;
+    const scale =
+      0.004 *
+      this.sensitivity *
+      (this.state.aiming ? (this.state.weapon === 2 ? 0.3 : 0.65) : 1);
+    this.yaw -= dx * scale;
+    this.pitch = THREE.MathUtils.clamp(this.pitch - dy * scale, -1.35, 1.35);
+  }
+  touchAction(action: 'fire' | 'aim' | 'crouch' | 'jump', pressed = true) {
+    if (!this.touchMode) return;
+    if (action === 'fire' && !pressed) {
+      this.held = false;
+      return;
+    }
+    if (this.state.phase !== 'running') return;
+    if (action === 'fire') {
+      this.held = true;
+      this.state.sprinting = false;
+      this.fire();
+    }
+    if (action === 'aim' && !this.state.reloading)
+      this.state.aiming = !this.state.aiming;
+    if (action === 'crouch') {
+      if (this.keys.has('KeyC')) this.keys.delete('KeyC');
+      else this.keys.add('KeyC');
+    }
+    if (action === 'jump') this.motion.jumpBuffer = 0.13;
+    this.emit();
+  }
+  resetTraining() {
+    if (!this.level.practice || this.state.phase === 'running') return false;
+    this.reset();
+    this.state.phase = 'ready';
     this.emit();
     return true;
   }
@@ -1462,7 +1546,8 @@ export class Arena {
       this.state.hits++;
       this.sound('hit');
     }
-    if (this.state.kills >= this.level.goal) this.finish(true);
+    if (!this.level.practice && this.state.kills >= this.level.goal)
+      this.finish(true);
     this.emit();
   }
   private castShot(
@@ -1523,6 +1608,30 @@ export class Arena {
     this.audioEngine?.play(type, this.state.weapon);
   }
   private updateBots(dt: number) {
+    if (this.level.practice) {
+      for (const bot of this.bots) {
+        const origin = this.level.spawns[bot.id + 1];
+        if (!bot.alive) {
+          bot.respawn = Math.min(bot.respawn, 2) - dt;
+          if (bot.respawn > 0) continue;
+          bot.alive = true;
+          bot.group.visible = true;
+          bot.health = 100;
+          bot.healthBar.scale.x = 0.79;
+        }
+        bot.group.position.set(
+          origin.x +
+            (bot.id % 2 ? Math.sin(this.elapsed * 1.3 + bot.id) * 2 : 0),
+          0,
+          origin.z,
+        );
+        bot.group.rotation.y = Math.atan2(
+          this.camera.position.x - bot.group.position.x,
+          this.camera.position.z - bot.group.position.z,
+        );
+      }
+      return;
+    }
     this.pathTime -= dt;
     if (this.pathTime <= 0) {
       this.field = navigationField(
@@ -1686,7 +1795,7 @@ export class Arena {
             this.state.aiming = false;
             this.state.reloading = false;
             this.reloadTime = 0;
-            this.held = false;
+            this.clearInput();
             this.addFeed(
               `涂鸦 ${String(bot.id + 1).padStart(2, '0')} 擦掉了你`,
             );
@@ -1749,16 +1858,23 @@ export class Arena {
       this.keys.has('ControlLeft') ||
       this.keys.has('ControlRight');
     this.state.sprinting =
-      (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) &&
-      this.keys.has('KeyW') &&
+      (this.keys.has('ShiftLeft') ||
+        this.keys.has('ShiftRight') ||
+        (this.touchMode && this.touchForward > 0.9)) &&
+      (this.keys.has('KeyW') || (this.touchMode && this.touchForward > 0.9)) &&
       !this.keys.has('KeyS') &&
       !this.state.aiming &&
       !this.state.crouching &&
       !this.state.reloading &&
       !this.held;
     const forward =
-        Number(this.keys.has('KeyW')) - Number(this.keys.has('KeyS')),
-      right = Number(this.keys.has('KeyD')) - Number(this.keys.has('KeyA'));
+        Number(this.keys.has('KeyW')) -
+        Number(this.keys.has('KeyS')) +
+        (this.touchForward || 0),
+      right =
+        Number(this.keys.has('KeyD')) -
+        Number(this.keys.has('KeyA')) +
+        (this.touchRight || 0);
     const speed = this.state.crouching
       ? 2.1
       : this.state.sprinting
@@ -1772,7 +1888,12 @@ export class Arena {
     const grounded = this.motion.grounded;
     stepMotion(
       this.motion,
-      { forward, right, yaw: this.yaw, speed },
+      {
+        forward,
+        right,
+        yaw: this.yaw,
+        speed: speed * Math.min(1, Math.hypot(forward, right)),
+      },
       dt,
       this.level.obstacles,
     );
@@ -1822,6 +1943,10 @@ export class Arena {
         this.state.reloadLabel = '';
         this.emit();
       }
+    }
+    if (this.level.practice && this.trainingUnlimited) {
+      this.state.reserve = this.reserves[this.state.weapon] =
+        WEAPONS[this.state.weapon].reserve;
     }
   }
   private updateGun(dt: number, active: boolean) {
@@ -1947,9 +2072,10 @@ export class Arena {
     this.last = timestamp;
     const dt = Math.min(rawDt, 0.1),
       active = this.state.phase === 'running' || this.state.phase === 'dead';
-    this.elapsed += dt;
+    if (active) this.elapsed += dt;
     if (active) {
-      this.state.time = Math.max(0, this.state.time - rawDt);
+      if (!this.level.practice)
+        this.state.time = Math.max(0, this.state.time - rawDt);
       this.immunity -= dt;
       this.hitTime = Math.max(0, this.hitTime - dt);
       this.hurtTime = Math.max(0, this.hurtTime - dt);
@@ -1964,7 +2090,7 @@ export class Arena {
         this.state.respawn -= dt;
         if (this.state.respawn <= 0) this.respawnPlayer();
       }
-      if (this.state.time <= 0) {
+      if (!this.level.practice && this.state.time <= 0) {
         this.finish(false);
       }
     }
@@ -2166,7 +2292,8 @@ export class Arena {
     const w = this.host.clientWidth || 1000,
       h = this.host.clientHeight || 600;
     this.renderer.setPixelRatio(
-      renderPixelRatio(w, h, devicePixelRatio, this.resolutionQuality),
+      renderPixelRatio(w, h, devicePixelRatio, this.resolutionQuality) *
+        (this.touchMode ? 0.72 : 1),
     );
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;

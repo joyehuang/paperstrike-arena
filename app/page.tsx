@@ -33,6 +33,9 @@ import { MUSIC } from './game/audio';
 import { damageLabel } from './game/combat-feedback';
 import { Arena, drawWeapon, WEAPONS, type Snapshot } from './game/arena';
 import { browserGameTools } from './game/webmcp';
+import { TouchControls } from './touch-controls';
+
+const finalCombatLevel = LEVELS.filter((l) => !l.practice).length - 1;
 
 const initial: Snapshot = {
   phase: 'ready',
@@ -156,6 +159,9 @@ export default function Home() {
     [fullscreen, setFullscreen] = useState(false),
     [immersive, setImmersive] = useState(false),
     [motionAmount, setMotionAmount] = useState(25);
+  const [touch, setTouch] = useState(false);
+  const [engine, setEngine] = useState<Arena | null>(null);
+  const [unlimited, setUnlimited] = useState(true);
   useEffect(() => {
     let instance: Arena | null = null;
     let cleanup = () => {};
@@ -165,11 +171,13 @@ export default function Home() {
       try {
         instance = new Arena(scene.current, minimap.current, setGame, setError);
         arena.current = instance;
+        setEngine(instance);
+        setTouch(instance.touchMode);
         cleanup = browserGameTools(instance);
         setLoaded(true);
       } catch {
         setError(
-          '三维画面未能启动。请使用支持 WebGL 的桌面浏览器，并开启硬件加速。',
+          '三维画面未能启动。请使用支持 WebGL 的浏览器，并开启硬件加速。',
         );
       }
     });
@@ -197,6 +205,7 @@ export default function Home() {
   const launch = () => {
       setError('');
       setImmersive(true);
+      if (touch && window.innerHeight > window.innerWidth) return;
       arena.current?.start();
     },
     overlay = ['ready', 'paused', 'ended'].includes(game.phase),
@@ -212,9 +221,17 @@ export default function Home() {
     if (document.fullscreenElement)
       void document.exitFullscreen().catch(() => {});
   };
+  useEffect(() => {
+    const rotate = () => {
+      if (arena.current?.touchMode && window.innerHeight > window.innerWidth)
+        arena.current.pause();
+    };
+    window.addEventListener('resize', rotate);
+    return () => window.removeEventListener('resize', rotate);
+  }, []);
   return (
     <main
-      className={`app ${fullscreen ? 'is-fullscreen' : ''} ${immersive ? 'play-mode' : ''}`}
+      className={`app ${touch ? 'touch-mode' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${immersive ? 'play-mode' : ''}`}
     >
       <header className="site-header">
         <Link href="/" className="brand" aria-label="Paperstrike 首页">
@@ -259,8 +276,11 @@ export default function Home() {
         <div className="section-heading">
           <div className="arena-label">
             <span className="ink-dot" />
-            闯关混战<span className="slash">/</span>
-            <span className="muted">你 vs. 涂鸦小队</span>
+            {level.practice ? '训练场' : '闯关混战'}
+            <span className="slash">/</span>
+            <span className="muted">
+              {level.practice ? '练准心，也练手感' : '你 vs. 涂鸦小队'}
+            </span>
           </div>
           <button
             className="text-button"
@@ -279,6 +299,16 @@ export default function Home() {
           id="game-frame"
         >
           <div ref={scene} className="scene" aria-label="三维手绘射击竞技场" />
+          {touch && immersive && (
+            <div className="rotate-notice">
+              <strong>请横过手机</strong>
+              <p>左手移动，右手瞄准。横屏后点击开始或继续。</p>
+              <button onClick={leaveCombat}>返回菜单</button>
+            </div>
+          )}
+          {touch && game.phase === 'running' && engine && (
+            <TouchControls arena={engine} game={game} />
+          )}
           <div className="paper-grain" />
           <div className="game-top-left">
             <span className="live-dot" />
@@ -290,8 +320,9 @@ export default function Home() {
                   : 'DEATHMATCH'}
             </span>
             <small>
-              第 {game.level + 1} 关 · 敌人 {game.aliveEnemies} /{' '}
-              {level.enemies} 存活
+              {level.practice
+                ? '练习画室 · 靶子不会还击'
+                : `第 ${game.level + 1} 关 · 敌人 ${game.aliveEnemies} / ${level.enemies} 存活`}
             </small>
           </div>
           <div className="match-score">
@@ -299,21 +330,31 @@ export default function Home() {
               <span className="score-number">
                 {String(game.kills).padStart(2, '0')}
               </span>
-              <span className="score-label">击杀 / 目标 {level.goal}</span>
+              <span className="score-label">
+                {level.practice ? '击倒靶子' : `击杀 / 目标 ${level.goal}`}
+              </span>
             </div>
             <div className="match-time">
               <span>
-                {Math.floor(game.time / 60)}
-                <b>:</b>
-                {String(Math.ceil(game.time % 60)).padStart(2, '0')}
+                {level.practice ? '∞' : Math.floor(game.time / 60)}
+                {!level.practice && (
+                  <>
+                    <b>:</b>
+                    {String(Math.ceil(game.time % 60)).padStart(2, '0')}
+                  </>
+                )}
               </span>
-              <small>TIME LEFT</small>
+              <small>{level.practice ? '自由练习' : 'TIME LEFT'}</small>
             </div>
             <div>
               <span className="score-number secondary">
-                {String(game.deaths).padStart(2, '0')}
+                {level.practice
+                  ? `${game.shots ? Math.round((game.hits / game.shots) * 100) : 0}%`
+                  : String(game.deaths).padStart(2, '0')}
               </span>
-              <span className="score-label">阵亡</span>
+              <span className="score-label">
+                {level.practice ? '命中率' : '阵亡'}
+              </span>
             </div>
           </div>
           <aside className="minimap-card">
@@ -483,7 +524,7 @@ export default function Home() {
                 <h1>
                   {game.phase === 'ended' ? (
                     game.won ? (
-                      game.level === LEVELS.length - 1 ? (
+                      game.level === finalCombatLevel ? (
                         '天台速写，拿下了。'
                       ) : (
                         '这张画纸，拿下了。'
@@ -531,16 +572,37 @@ export default function Home() {
                     0{game.level + 1} / {level.name}
                   </span>
                   <b>
-                    {level.goal} 次击杀 · {level.duration / 60} 分钟
+                    {level.practice
+                      ? '静止靶 + 移动靶 · 不限时'
+                      : `${level.goal} 次击杀 · ${level.duration / 60} 分钟`}
                   </b>
                 </div>
+                {level.practice && (
+                  <div className="training-options">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={unlimited}
+                        onChange={(e) => {
+                          setUnlimited(e.target.checked);
+                          if (arena.current)
+                            arena.current.trainingUnlimited = e.target.checked;
+                        }}
+                      />
+                      无限备用弹药（仍需换弹）
+                    </label>
+                    <button onClick={() => arena.current?.resetTraining()}>
+                      重置练习统计
+                    </button>
+                  </div>
+                )}
                 <button
                   className="start-button"
                   disabled={!loaded}
                   onClick={
                     game.phase === 'ended' &&
                     game.won &&
-                    game.level < LEVELS.length - 1
+                    game.level < finalCombatLevel
                       ? advance
                       : launch
                   }
@@ -554,23 +616,29 @@ export default function Home() {
                     ? game.phase === 'paused'
                       ? '继续战斗'
                       : game.phase === 'ended'
-                        ? game.won && game.level < LEVELS.length - 1
+                        ? game.won && game.level < finalCombatLevel
                           ? '进入下一关'
                           : '再画一局'
-                        : '全屏进入战场'
+                        : level.practice
+                          ? '进入训练场'
+                          : touch
+                            ? '横屏进入战场'
+                            : '全屏进入战场'
                     : '正在铺开画纸…'}
                   <span>↗</span>
                 </button>
                 {game.phase === 'ended' &&
                   game.won &&
-                  game.level < LEVELS.length - 1 && (
+                  game.level < finalCombatLevel && (
                     <button className="replay-level" onClick={launch}>
                       重玩这一关
                     </button>
                   )}
                 <div className="start-hint">
                   <Mouse size={14} />
-                  全屏 · 锁定鼠标<span>·</span>Esc 暂停
+                  {touch
+                    ? '左摇杆移动 · 右侧滑动瞄准 · 点击暂停'
+                    : '全屏 · 锁定鼠标 · Esc 暂停'}
                 </div>
                 {immersive && (
                   <button className="leave-combat" onClick={leaveCombat}>
@@ -728,7 +796,7 @@ export default function Home() {
                 <LevelMap index={index} />
                 <div className="level-card-info">
                   <span className="level-number">
-                    关卡 0{index + 1}{' '}
+                    {item.practice ? '独立训练场' : `关卡 0${index + 1}`}{' '}
                     <RadioGroupItem
                       id={'level-' + index}
                       value={String(index)}
@@ -738,7 +806,9 @@ export default function Home() {
                   <strong>{item.name}</strong>
                   <span>{item.tactic}</span>
                   <small>
-                    最多 {item.enemies} 名对手 · {item.goal} 次击杀
+                    {item.practice
+                      ? '5 座靶子 · 不限时 · 可选无限弹药'
+                      : `最多 ${item.enemies} 名对手 · ${item.goal} 次击杀`}
                   </small>
                 </div>
                 <ChevronRight size={17} className="level-card-arrow" />
@@ -842,7 +912,17 @@ export default function Home() {
             次击杀即可通关。阵亡 3 秒后重生，武器补满弹药。
           </DialogDescription>
           <div className="help-grid">
-            {controls.map(([key, action]) => (
+            {(touch
+              ? [
+                  ['左摇杆', '移动，向前推满冲刺'],
+                  ['右侧滑动', '转动视角'],
+                  ['开火', '点击射击，步枪可按住'],
+                  ['开镜 / 蹲下', '点击切换状态'],
+                  ['跳跃 / 换弹', '点击执行'],
+                  ['暂停', '暂停并返回菜单'],
+                ]
+              : controls
+            ).map(([key, action]) => (
               <div key={key}>
                 <kbd>{key}</kbd>
                 <span>{action}</span>
@@ -850,6 +930,7 @@ export default function Home() {
             ))}
           </div>
           <p className="dialog-note">
+            练习画室提供静止靶和移动靶，不限时、不会受伤，可在暂停面板重置统计或切换无限备用弹药。
             小地图蓝点是你，橙点是敌人。利用掩体躲避攻击，蹲下能降低散布，狙击枪开镜可放大
             4 倍。走近绿色急救包恢复 40
             点生命，黄色弹药箱补充各武器备用弹药，蓝色护甲片增加 30
@@ -863,10 +944,11 @@ export default function Home() {
           <DialogDescription>找到顺手的瞄准速度和声音大小。</DialogDescription>
           <div className="setting-row">
             <label>
-              鼠标灵敏度<b>{sensitivity}</b>
+              {touch ? '触屏灵敏度' : '鼠标灵敏度'}
+              <b>{sensitivity}</b>
             </label>
             <Slider
-              aria-label="鼠标灵敏度"
+              aria-label={touch ? '触屏灵敏度' : '鼠标灵敏度'}
               min={10}
               max={100}
               value={[sensitivity]}

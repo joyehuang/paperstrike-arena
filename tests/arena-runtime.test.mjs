@@ -90,6 +90,7 @@ function fixture(levelIndex = 0) {
       notify() {},
       pitch: 0,
       yaw: 0,
+      sensitivity: 1,
     });
     arena.buildWorld();
     batchSketch(arena.scene);
@@ -115,8 +116,104 @@ function drawCount(root) {
   return count;
 }
 
+test('training targets cannot damage players and reuse static and moving target slots', () => {
+  const arena = fixture(LEVELS.findIndex((l) => l.practice));
+  const start = arena.bots.map((b) => b.group.position.clone());
+  arena.elapsed = 1;
+  arena.updateBots(1);
+  assert.equal(arena.state.health, 100);
+  assert.equal(arena.state.phase, 'running');
+  assert.equal(arena.bots[0].group.position.x, start[0].x);
+  assert.notEqual(arena.bots[1].group.position.x, start[1].x);
+  const target = arena.bots[0];
+  target.group.position.set(0, 0, 5);
+  arena.fire();
+  arena.cooldown = 0;
+  arena.fire();
+  assert.equal(arena.state.kills, 1);
+  assert.equal(
+    arena.state.phase,
+    'running',
+    'practice has no kill victory threshold',
+  );
+  arena.updateBots(1);
+  assert.equal(target.alive, false);
+  arena.updateBots(1.1);
+  assert.equal(target.alive, true);
+  assert.equal(target.health, 100);
+  assert.equal(arena.bots.length, 5);
+});
+test('practice unlimited reserve is optional and still requires a reload', () => {
+  const arena = fixture(LEVELS.findIndex((l) => l.practice));
+  arena.trainingUnlimited = true;
+  arena.state.reserve = arena.reserves[0] = 0;
+  arena.state.ammo = arena.clips[0] = 0;
+  arena.updatePlayer(PHYSICS_STEP);
+  assert.equal(arena.state.reserve, WEAPONS[0].reserve);
+  assert.equal(arena.state.ammo, 0);
+  assert.equal(arena.reload(), true);
+  arena.updatePlayer(WEAPONS[0].reload);
+  assert.equal(arena.state.ammo, WEAPONS[0].capacity);
+  arena.trainingUnlimited = false;
+  arena.state.reserve = arena.reserves[0] = 3;
+  arena.updatePlayer(PHYSICS_STEP);
+  assert.equal(arena.state.reserve, 3);
+});
+test('touch movement is analog, aim is bounded and pausing releases held controls', () => {
+  const arena = fixture();
+  arena.touchMode = true;
+  arena.touchMove(0.4, 0);
+  for (let i = 0; i < 60; i++) arena.updatePlayer(PHYSICS_STEP);
+  assert.ok(Math.abs(arena.motion.vz) < 2);
+  arena.touchMove(1, 0);
+  arena.updatePlayer(PHYSICS_STEP);
+  assert.equal(arena.state.sprinting, true);
+  arena.touchLook(10, 10000);
+  assert.ok(arena.yaw < 0);
+  assert.equal(arena.pitch, -1.35);
+  arena.touchAction('aim');
+  arena.touchAction('crouch');
+  arena.updatePlayer(PHYSICS_STEP);
+  assert.equal(arena.state.aiming, true);
+  assert.equal(arena.state.crouching, true);
+  arena.touchAction('jump');
+  assert.ok(arena.motion.jumpBuffer > 0);
+  const prior = globalThis.document;
+  globalThis.document = {};
+  try {
+    arena.pause();
+  } finally {
+    globalThis.document = prior;
+  }
+  assert.equal(arena.touchForward, 0);
+  assert.equal(arena.state.aiming, false);
+  assert.equal(arena.held, false);
+  arena.touchMove(1, 0);
+  arena.touchAction('fire');
+  assert.equal(arena.touchForward, 0);
+  assert.equal(arena.held, false);
+});
+test('touch launch works without pointer lock or fullscreen support', () => {
+  const arena = fixture();
+  arena.touchMode = true;
+  arena.state.phase = 'ready';
+  arena.audioEngine.unlock = () => {};
+  arena.renderer.domElement.focus = () => {};
+  arena.error = () => {};
+  const prior = globalThis.document;
+  globalThis.document = { fullscreenEnabled: false };
+  try {
+    arena.start();
+  } finally {
+    globalThis.document = prior;
+  }
+  assert.equal(arena.state.phase, 'running');
+  assert.equal(arena.state.health, 100);
+});
+
 test('repeated bot deaths reuse a fixed roster and only respawn safely', () => {
   for (let level = 0; level < LEVELS.length; level++) {
+    if (LEVELS[level].practice) continue;
     const arena = fixture(level);
     const roster = [...arena.bots];
     for (let round = 0; round < 12; round++) {
