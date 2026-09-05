@@ -188,8 +188,14 @@ export default function PvpPage() {
       });
       r.send('sync');
     } catch (e) {
-      if (mounted.current)
-        setError(e instanceof Error ? e.message : '连接失败，请稍后再试');
+      if (mounted.current) {
+        const message = e instanceof Error ? e.message : '';
+        setError(
+          /failed to fetch|networkerror|load failed/i.test(message)
+            ? '无法连接对战服务器。请稍后重试；如果在内置浏览器中，请用 Chrome 或 Safari 打开 joyehuang.app/pvp。'
+            : message || '连接失败，请稍后再试',
+        );
+      }
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -208,7 +214,9 @@ export default function PvpPage() {
   const own = snapshot?.players.find((p) => p.id === room?.sessionId);
   return (
     <main className="pvp-lobby">
-      <Link href="/">← 单人战场与训练场</Link>
+      <Link href="/" prefetch={false}>
+        ← 单人战场与训练场
+      </Link>
       <span className="pvp-kicker">PAPERSTRIKE / PVP</span>
       <h1>
         叫上朋友，
@@ -227,6 +235,7 @@ export default function PvpPage() {
       )}
       {!room ? (
         <div className="pvp-card">
+          <p>邀请朋友：填写昵称后创建房间，系统会生成房间码。</p>
           <label>
             昵称
             <input
@@ -250,12 +259,12 @@ export default function PvpPage() {
             </button>
           </div>
           <label>
-            房间码
+            加入朋友的房间码
             <input
               value={code}
               maxLength={32}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="粘贴朋友的房间码"
+              placeholder="仅加入房间时填写，无需自己设置"
             />
           </label>
           <button
@@ -268,6 +277,9 @@ export default function PvpPage() {
       ) : (
         <div className="pvp-card">
           <h2>{snapshot?.phase === 'ended' ? '本局结束' : '等待队友'}</h2>
+          <p>
+            把房间码发给同类设备的朋友。至少两人加入并准备后，房主即可开始。
+          </p>
           <p>
             房间码 <strong>{room.roomId}</strong>
           </p>

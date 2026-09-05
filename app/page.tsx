@@ -1,6 +1,6 @@
 'use client';
-import { memo, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   Crosshair,
@@ -234,7 +234,12 @@ export default function Home() {
       className={`app ${touch ? 'touch-mode' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${immersive ? 'play-mode' : ''}`}
     >
       <header className="site-header">
-        <Link href="/" className="brand" aria-label="Paperstrike 首页">
+        <Link
+          href="/"
+          prefetch={false}
+          className="brand"
+          aria-label="Paperstrike 首页"
+        >
           <span className="brand-icon">
             <Crosshair size={29} strokeWidth={1.7} />
           </span>
@@ -247,9 +252,14 @@ export default function Home() {
           a little ink. a lot of action.<span className="note-arrow">↴</span>
         </div>
         <div className="header-actions">
-          <Link href="/pvp" className="text-button">
+          <a
+            href="/pvp"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-button"
+          >
             多人对战 ↗
-          </Link>
+          </a>
           <span className="prototype-tag">
             <span />
             可玩原型 v0.3
