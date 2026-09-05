@@ -1,3 +1,10 @@
 pvp.joyehuang.app {
 	reverse_proxy 127.0.0.1:2567
 }
+
+play.joyehuang.app {
+	root * /srv/paperstrike-preview/current
+	encode zstd gzip
+	try_files {path} {path}.html {path}/index.html
+	file_server
+}

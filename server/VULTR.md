@@ -55,3 +55,15 @@ curl -f https://pvp.joyehuang.app/health
 Vercel Production 变量 `NEXT_PUBLIC_PVP_SERVER_URL` 设为 `https://pvp.joyehuang.app`，更改后必须重新构建部署前端。
 如果实际玩家线路更差，可把同一变量恢复为 `https://paperstrike-pvp.onrender.com` 并重新部署。
 原 Render 服务尚未停用，两边都会继续计费。确认东京节点满足真实玩家需求后，再决定是否停用 Render。
+
+## 东京前端测试入口
+
+`https://play.joyehuang.app/pvp` 是现有 Vultr 上的静态前端镜像，A 记录指向 `45.32.255.230`。正式入口仍为 Vercel；两个入口连接同一个 `pvp.joyehuang.app` 后端。
+
+2026-09-06 首次镜像来自提交 `4259798fe69a13778d1e7e8fc645dd318a7d271d`，静态产物约 9.2 MB。此镜像不会随 Git push 自动更新。维护者更新后端 checkout 和依赖后，可运行 `bash server/deploy/update-preview.sh` 构建并更新 `/srv/paperstrike-preview/current`；此脚本不拉取代码，也不重启游戏。后端繁忙时避免在同一台机器上构建。
+
+仓库中的 Caddyfile 展示合并配置。实际服务器通过 `/etc/caddy/sites/paperstrike-preview.caddy` 和主配置的 import 加载前端站点；后端通过 systemd 的 `preview-origin.conf` drop-in 增加镜像 Origin。两种配置形式不要重复应用。
+
+本地线路已验证镜像浏览器建房、真实 WSS 双人加入/开局/移动、六位房间码及设备隔离。HTML 请求 5 次的 TTFB 中位数：Vercel 31 ms，Vultr 248 ms；镜像入口游戏 RTT 中位数 234 ms、p95 236 ms。两站初始 18 个 JS/CSS 资源均成功，解压后共 1,452,155 字节。这些不是国内测试，也不是完整页面渲染耗时。
+
+国内探测和解释见 [NETWORK_TEST_2026-09-06.md](NETWORK_TEST_2026-09-06.md)。仅换前端不会改变玩家到现有游戏后端的路径；只有使玩家可以关闭绕路代理时，才可能间接改善游戏延迟。

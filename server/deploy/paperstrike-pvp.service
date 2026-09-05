@@ -10,7 +10,7 @@ Group=paperstrike
 WorkingDirectory=/opt/paperstrike
 Environment=NODE_ENV=production
 Environment=PORT=2567
-Environment=ALLOWED_ORIGINS=https://joyehuang.app,https://paperstrike-arena.vercel.app
+Environment=ALLOWED_ORIGINS=https://joyehuang.app,https://paperstrike-arena.vercel.app,https://play.joyehuang.app
 Environment=MAX_ROOMS=32
 ExecStart=/usr/local/bin/node --import tsx server/index.ts
 Restart=on-failure
