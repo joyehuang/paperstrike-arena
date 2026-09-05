@@ -10,6 +10,7 @@ import {
   type PvpSnapshot,
   PVP_MODES,
   type PvpMode,
+  type PvpPlayer,
 } from '../game/pvp-protocol';
 import { damageLabel } from '../game/combat-feedback';
 import { CombatVitals, CombatReticle } from '../combat-hud';
@@ -305,6 +306,7 @@ export default function PvpPage() {
     [name, setName] = useState('新画手'),
     [code, setCode] = useState('');
   const [room, setRoom] = useState<Room | null>(null),
+    [resultPlayers, setResultPlayers] = useState<PvpPlayer[]>([]),
     [snapshot, setSnapshot] = useState<PvpSnapshot | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -351,8 +353,21 @@ export default function PvpPage() {
       setOnline(true);
       let lastPhase = '',
         lastUiUpdate = 0;
+      const roster = new Map<string, PvpPlayer>();
       r.onMessage('snapshot', (s: PvpSnapshot) => {
         if (current.current !== r) return;
+        if (s.phase === 'playing' && lastPhase !== 'playing') roster.clear();
+        if (s.phase === 'playing')
+          for (const p of s.players) roster.set(p.id, p);
+        if (s.phase === 'ended' && lastPhase !== 'ended') {
+          for (const p of s.players) roster.set(p.id, p);
+          setResultPlayers(
+            [...roster.values()].map((p) => ({
+              ...p,
+              connected: s.players.some((v) => v.id === p.id && v.connected),
+            })),
+          );
+        }
         const now = performance.now();
         if (
           s.phase !== lastPhase ||
@@ -408,9 +423,11 @@ export default function PvpPage() {
     );
   const own = snapshot?.players.find((p) => p.id === room?.sessionId);
   const ended = snapshot?.phase === 'ended';
-  const standings = [...(snapshot?.players || [])].sort(
-    (a, b) => b.kills - a.kills || a.deaths - b.deaths || a.slot - b.slot,
-  );
+  const standings = [
+    ...(ended && resultPlayers.length
+      ? resultPlayers
+      : snapshot?.players || []),
+  ].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.slot - b.slot);
   const winner = standings[0];
   const leaders = standings.filter(
     (p) => p.kills === winner?.kills && p.deaths === winner?.deaths,

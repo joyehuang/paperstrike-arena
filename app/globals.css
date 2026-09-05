@@ -2543,7 +2543,7 @@ kbd {
 .pvp-match .minimap-card { top: 96px; }
 .pvp-match .pvp-kill-feed { top: 28px; left: auto; right: 28px; align-items: flex-end; max-width: 34%; }
 .pvp-kill-feed > div { font-size: 12px; border-left: 3px solid #cf7953; }
-.pvp-match .pvp-pause { top: 90px; right: auto; left: 28px; display: flex; align-items: center; gap: 8px; }
+.pvp-match .pvp-pause { top: 90px; bottom: auto; right: auto; left: 28px; display: flex; align-items: center; gap: 8px; }
 .pvp-performance { display: flex; justify-content: center; align-items: center; gap: 8px; font-size: 12px; color: #65746b; margin: 15px 0; }
 .pvp-performance input { accent-color: #668c75; }
 .pvp-result-heading { display: flex; align-items: center; gap: 16px; color: #b68c3d; margin-bottom: 18px; }
@@ -2566,3 +2566,7 @@ kbd {
  .pvp-match .minimap-card { top: 134px; right: 12px; }
  .pvp-scoreboard th, .pvp-scoreboard td { padding: 10px 5px; font-size: 12px; }
 }
+
+.pvp-results .result-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; text-align: center; }
+.pvp-results .result-stats > span { display: flex; flex-direction: column; gap: 8px; color: #7b7965; font-size: 12px; }
+.pvp-results .result-stats b { display: block; font-size: 40px; line-height: 1; color: #3b5545; }

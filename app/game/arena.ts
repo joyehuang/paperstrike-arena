@@ -1160,6 +1160,10 @@ export class Arena {
       own.motion.z + own.motion.vz * lead - (historical?.z ?? this.motion.z);
     const error = Math.hypot(dx, dz);
     if (!this.pvpInitialized || respawn || error > 2) {
+      if (!this.pvpInitialized || respawn) {
+        this.yaw = Math.atan2(own.motion.x, own.motion.z);
+        this.pitch = 0;
+      }
       Object.assign(this.motion, own.motion);
       Object.assign(this.previousMotion, {
         x: own.motion.x,
