@@ -1,0 +1,27 @@
+[Unit]
+Description=Paperstrike multiplayer server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paperstrike
+Group=paperstrike
+WorkingDirectory=/opt/paperstrike
+Environment=NODE_ENV=production
+Environment=PORT=2567
+Environment=ALLOWED_ORIGINS=https://joyehuang.app,https://paperstrike-arena.vercel.app
+Environment=MAX_ROOMS=32
+ExecStart=/usr/local/bin/node --import tsx server/index.ts
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+SyslogIdentifier=paperstrike-pvp
+
+[Install]
+WantedBy=multi-user.target
