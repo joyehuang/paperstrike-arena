@@ -163,7 +163,7 @@ export default function PvpPage() {
       void current.current?.leave();
     };
   }, []);
-  const join = async (mode: 'quick' | 'create' | 'code') => {
+  const join = async (action: 'quick' | 'create' | 'code') => {
     if (!endpoint || busy) return;
     setBusy(true);
     setError('');
@@ -171,9 +171,9 @@ export default function PvpPage() {
       const client = new Client(endpoint),
         options = { name, device, mode, touchPoints: navigator.maxTouchPoints };
       const r =
-        mode === 'quick'
+        action === 'quick'
           ? await client.joinOrCreate('battle', options)
-          : mode === 'create'
+          : action === 'create'
             ? await client.create('battle', { ...options, private: true })
             : await client.joinById(code.trim(), options);
       if (!mounted.current) {
