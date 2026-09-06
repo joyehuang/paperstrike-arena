@@ -15,6 +15,14 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
+      <head>
+        <script
+          defer
+          src="https://umami.joyehuang.dev/script.js"
+          data-website-id="130840cb-7ecb-479c-ba68-4160362b9b55"
+          data-domains="joyehuang.app,www.joyehuang.app"
+        />
+      </head>
       <body>{children}</body>
     </html>
   );
